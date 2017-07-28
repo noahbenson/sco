@@ -16,7 +16,7 @@ from sco.anatomy       import (calc_anatomy,         volumes_anatomy_chain,
                                calc_surface_anatomy, surface_anatomy_chain,
                                export_predicted_response_volumes,
                                export_predicted_response_surface)
-from sco.model_comparison import create_model_dataframe
+#from sco.model_comparison import create_model_dataframe
 
 from sco.util          import (cortical_image)
 
