@@ -4,138 +4,42 @@
 # By Noah C. Benson
 
 import numpy                 as     np
+import pyrsistent            as     pyr
+
+import pimms, os, sys, warnings
+
+from   ..util                import (lookup_labels, units)
+
 from   scipy                 import ndimage    as ndi
 from   scipy.interpolate     import (RectBivariateSpline, interp1d)
 
 from   skimage               import data
 from   skimage.util          import img_as_float
 
-from   ..core                import calculates
-
-import warnings
-
 warnings.filterwarnings('ignore', category=UserWarning, message='.*From scipy 0.13.0.*')
 
-@calculates()
-def calc_stimulus_default_parameters(stimulus_image_filenames=None,
-                                     stimulus_images=None,
-                                     stimulus_edge_value=0.5,
-                                     stimulus_aperture_edge_width=None,
-                                     stimulus_pixels_per_degree=24,
-                                     normalized_stimulus_aperture=None,
-                                     normalized_pixels_per_degree=None,
-                                     max_eccentricity=None):
+@pimms.calc('gamma_correction_function')
+def calc_gamma_correction(gamma=None):
     '''
-    calc_stimulus_default_parameters() is a calculator that expects no particular options, but
-    fills in several options if not given. These fall into two categories; first, some options
-    are given default values if not provided:
-      * stimulus_edge_value is set to 0.5
-      * stimulus_pixels_per_degree is set to 24 if not provided
-      * stimulus_aperture_edge_width is set to normalized_pixels_per_degree
-    Other options are dependent on each other:
-      * normalized_stimulus_aperture
-      * normalized_pixels_per_degree
-      * max_eccentricity
-    If all three of these are provided (and not None) then they are left as is; if two are given
-    then the last is set to obey the equation
-     max_eccentricity * normalized_pixels_per_degree == normalized_stimulus_aperture.
-    If one or zero of them is given, then the minimum number of following defaults are used, with
-    the remaining value filled in as soon as two of the three values has been assigned:
-      * max_eccentricity = 12
-      * normalized_pixels_per_degree = 15
-    Finally, the parameter stimulus_images is required so that all values can be coerced to arrays
-    the appropriate size if necessary.
-    '''
-    mxe = max_eccentricity
-    d2p = normalized_pixels_per_degree
-    asz = normalized_stimulus_aperture
-    if stimulus_image_filenames is None and stimulus_images is None:
-        raise ValueError('Either stimulus_image_filenames or stimulus_images must be given!')
-    elif stimulus_image_filenames is None:
-        n = len(stimulus_images)
-    else:
-        n = len(stimulus_image_filenames)
-    # First, fill out lengths:
-    if hasattr(mxe, '__iter__'):
-        if len(mxe) != n:
-            raise ValueError('len(max_eccentricity) != len(stimulus_images)')
-    else:
-        mxe = [mxe for i in range(n)]
-    if hasattr(d2p, '__iter__'):
-        if len(d2p) != n:
-            raise ValueError('len(normalized_pixels_per_degree) != len(stimulus_images)')
-    else:
-        d2p = [d2p for i in range(n)]
-    if hasattr(asz, '__iter__'):
-        if len(asz) != n:
-            raise ValueError('len(normalized_stimulus_aperture) != len(stimulus_images)')
-    else:
-        asz = [asz for i in range(n)]
-    if hasattr(stimulus_edge_value, '__iter__'):
-        if len(stimulus_edge_value) != n:
-            raise ValueError('len(stimulus_edge_value) != len(stimulus_images)')
-    else:
-        stimulus_edge_value = [stimulus_edge_value for i in range(n)]
-    if hasattr(stimulus_pixels_per_degree, '__iter__'):
-        if len(stimulus_pixels_per_degree) != n:
-            raise ValueError('len(stimulus_pixels_per_degree) != len(stimulus_images)')
-    else:
-        stimulus_pixels_per_degree = [stimulus_pixels_per_degree for i in range(n)]
-    if hasattr(stimulus_aperture_edge_width, '__iter__'):
-        if len(stimulus_aperture_edge_width) != n:
-            raise ValueError('len(stimulus_aperture_edge_width) != len(stimulus_images)')
-    else:
-        stimulus_aperture_edge_width = [stimulus_aperture_edge_width for i in range(n)]
-    # Now fix the params that depend on each other:
-    (mxe, d2p, asz) = [[None if x == 0 else x for x in xx] for xx in [mxe, d2p, asz]]
-    mxe = [m     if m is not None           else \
-           12    if d is None or a is None  else \
-           a/d
-           for (m,d,a) in zip(mxe,d2p,asz)]
-    d2p = [d     if d is not None           else \
-           15    if a is None               else \
-           a/m
-           for (m,d,a) in zip(mxe,d2p,asz)]
-    asz = [a     if a is not None           else \
-           m*d
-           for (m,d,a) in zip(mxe,d2p,asz)]
-    # And fix the aperture edge if needed:
-    stimulus_aperture_edge_width = [d if ew is None else ew
-                                    for (ew,d) in zip(stimulus_aperture_edge_width,d2p)]
-    # And return all of them as arrays:
-    return {'stimulus_edge_value':          np.asarray(stimulus_edge_value),
-            'stimulus_pixels_per_degree':   np.asarray(stimulus_pixels_per_degree),
-            'stimulus_aperture_edge_width': np.asarray(stimulus_aperture_edge_width),
-            'normalized_stimulus_aperture': np.asarray(asz),
-            'normalized_pixels_per_degree': np.asarray(d2p),
-            'max_eccentricity':             np.asarray(mxe),
-            'stimulus_images':              stimulus_images,
-            'stimulus_image_filenames':     stimulus_image_filenames}
+    calc_gamma_correction is a calculator that accepts an optional argument gamma and provides a
+    value gamma_correction_function that corrects the contrast of a stimulus presentation.
 
-@calculates('stimulus_images', filenames='stimulus_image_filenames')
-def import_stimulus_images(filenames, stimulus_images=None, stimulus_gamma=None,
-                           img_already_rescaled=False):
-    '''
-    import_stimulus_images is a calculator that expects the 'stimulus_image_filenames' value and 
-    converts this, which it expects to be a list of image filenames (potentially containing 
-    pre-loaded image matrices), into a list of images loaded from those filenames. It provides
-    this list as 'stimulus_images'.
-    The optional argument stimulus_gamma may also be passed to this function; if stimulus_gamma
-    is given, then it must be one of:
-      * an (n x 2) or (2 x n) matrix such that is equivalent to (potentially after transposition)
-        a matrix of (x,y) values where x is the input gamma and y is the corrected gamma.
-      * a vector of corrected gamma values; if the vector u is of length n, then this is equivalent
-        to passing a matrix in which the y-values are the elements of u and the x-values are evenly
-        spaced values that cover the interval [0,1]; accordingly there must be at least 2 elements.
-      * a function that accepts a number between 0 and 1 and returns the corrected gamma.
-    This function supples the stimulus_gamma back as a function that interpolates the numbers if
-    numbers are given instead of a function.
+    Optional afferent values:
+      @ gamma May be given, in which case it must be one of:
+        - an (n x 2) or (2 x n) matrix such that is equivalent to (potentially after transposition)
+          a matrix of (x,y) values where x is the input gamma and y is the corrected gamma
+        - a vector of corrected gamma values; if the vector u is of length n, then this is 
+          equivalent to passing a matrix in which the y-values are the elements of u and the
+          x-values are evenly spaced values that cover the interval [0,1]; accordingly there must be
+          at least 2 elements
+        - a function that accepts a number between 0 and 1 and returns the corrected gamma
+        By default this is None, and no gamma correction is applied.
     '''
     # First, setup the stimulus_gamma correction:
-    if stimulus_gamma is None:
-        stimulus_gamma = lambda x: x
-    elif hasattr(stimulus_gamma, '__iter__'):
-        vals = np.array(stimulus_gamma)
+    if gamma is None:                return lambda x: x
+    elif hasattr(gamma, '__call__'): return gamma
+    elif hasattr(gamma, '__iter__'):
+        vals = np.array(gamma)
         if len(vals.shape) > 2:
             raise ValueError('stimulus_gamma must be 1D or 2D array')
         if len(vals.shape) == 1:
@@ -144,25 +48,72 @@ def import_stimulus_images(filenames, stimulus_images=None, stimulus_gamma=None,
         # Okay, assume here that vals is nx2 or 2xn
         if vals.shape[1] != 2: vals = vals.T
         # and interpolate these
-        stimulus_gamma = interp1d(vals[:,0], vals[:,1], kind='cubic')
-    elif not hasattr(stimulus_gamma, '__call__'):
-        raise ValueError('Given stimulus_gamma argument has neither iter nor call attribute')
-    # Now load the images...
-    if stimulus_images is not None:
-        ims = [np.asarray(im, dtype=np.float64) for im in stimulus_images]
+        return interp1d(vals[:,0], vals[:,1], kind='cubic')
     else:
-        ims = filenames if hasattr(filenames, '__iter__') else [filenames]
-        ims = [np.asarray(data.load(im), dtype=np.float64) for im in ims]
-    # we assume our image lies between 0 and 1 for most of the code, so we ensure that's the
-    # case. We allow users to tell us that the image has already been rescaled to lie between 0 and
-    # 1. If not, we assume the max possible value is 255 (this is a reasonable assumption for
-    # images, they should always either lie between 0 and 1 or 0 and 255).
-    if not img_already_rescaled:
-        ims = [im/255. for im in ims]
-    ims = [stimulus_gamma(np.mean(im, axis=2) if len(im.shape) > 2 else im)    for im in ims]
-    # If the stimulus images are different sizes, this will be an array with
-    # dtype=object. Otherwise it will be normal
-    return {'stimulus_images': np.asarray(ims), 'stimulus_gamma':  stimulus_gamma}
+        raise ValueError('Given stimulus_gamma argument has neither iter nor call attribute')
+
+def import_stimulus(stim, gcf):
+    '''
+    import_stimulus(stim, gcf) yields the imported image for the given stimulus argument stim; stim
+    may be either a filename or an image array; the argument gcf must be the gamma correction
+    function.
+    '''
+    if isinstance(stim, basestring):
+        im = np.asarray(data.load(stim), dtype=np.float)
+    else:
+        im = np.asarray(stim, dtype=np.float)
+    if len(im.shape) == 3:
+        # average the color channels
+        im = np.mean(im, axis=2)
+    if len(im.shape) != 2:
+        raise ValueError('images must be 2D or 3D matrices')
+    # We need to make sure this image is between 0 and 1; if not, we assume it's between 0 and 255;
+    # for now it seems safe to automatically detect this
+    mx = np.max(im)
+    if not np.isclose(mx, 1) and mx > 1: im = im/255.0
+    # if we were given a color image,
+    if gcf is not None: im = gcf(im)
+    return im
+
+@pimms.calc('stimulus_map', 'stimulus_ordering', cache=True)
+def import_stimuli(stimulus, gamma_correction_function=None):
+    '''
+    import_stimuli is a calculation that ensures that the stimulus images to be used in the sco
+    calculation are properly imported.
+
+    Required afferent values:
+      @ stimulus May either be a dict or list of images matrices or a list of image filenames.
+
+    Optional afferent values:
+      @ gamma_correction_function May specifies how gamma should be corrected; this
+        should usually be provided via the gamma argument (see calc_gamma_correction and gamma).
+
+    Efferent output values:
+      @ stimulus_map Will be a persistent dict whose keys are the image identifiers and whose
+        values are the image matrices of the imported stimuli prior to normalization or any
+        processing.
+      @ stimulus_ordering Will be a persistent vector of the keys of stimulus_map in the order
+        provided.
+    '''
+    # Make this into a map so that we have ids and images/filenames
+    if not pimms.is_map(stimulus):
+        # first task: turn this into a map
+        if isinstance(stimulus, basestring):
+            stimulus = {stimulus: stimulus}
+            order = [stimulus]
+        elif hasattr(stimulus, '__iter__'):
+            pat = '%%0%dd' % (int(np.log10(len(stimulus))) + 1)
+            order = [(pat % i) for i in range(len(stimulus))]
+            stimulus = {(pat % i):s for (i,s) in enumerate(stimulus)}
+        else:
+            raise ValueError('stimulus is not iterable nor a filename')
+    else:
+        order = stimulus.keys()
+    # we can use the stimulus_importer function no matter what the stimulus arguments are
+    stim_map = {k:import_stimulus(v, gamma_correction_function) for (k,v) in stimulus.iteritems()}
+    for u in stim_map.itervalues():
+        u.setflags(write=False)
+    return {'stimulus_map': pyr.pmap(stim_map), 'stimulus_ordering': pyr.pvector(order)}
 
 def image_apply_aperture(im, radius,
                          center=None, fill_value=0.5, edge_width=10, crop=True):
@@ -223,34 +174,79 @@ def image_apply_aperture(im, radius,
     # That's it!
     return final_im
 
+@pimms.calc('image_array', 'image_names', 'pixel_centers', cache=True)
+def calc_images(pixels_per_degree, stimulus_map, stimulus_ordering,
+                background=0.5,
+                aperture_radius=None,
+                aperture_edge_width=None,
+                normalized_pixels_per_degree=12):
+    '''
+    calc_images() is a the calculation that converts the imported_stimuli value into the normalized
+    images value.
+    
+    Required afferent parameters:
+      @ pixels_per_degree Must specify the number of pixels per degree in the input images; note
+        that all stimulus images must have the same pixels_per_degree value.
+      @ stimulus_map Must be a map whose values are 2D image matrices (see import_stimuli).
+      @ stimulus_ordering Must be a list of the stimulus filenames or IDs (used by calc_images to
+        ensure the ordering of the resulting image_array datum is correct; see also import_stimuli).
 
-@calculates('normalized_stimulus_images',
-            imgs='stimulus_images',
-            edge_val='stimulus_edge_value',
-            deg2px='stimulus_pixels_per_degree',
-            normsz='normalized_stimulus_aperture',
-            normdeg2px='normalized_pixels_per_degree',
-            edge_width='stimulus_aperture_edge_width')
-def calc_normalized_stimulus_images(imgs, edge_val, deg2px, normsz, normdeg2px, edge_width):
+    Optional afferent parameters:
+      @ background Specifies the background color of the stimulus; by default this is 0.5 (gray);
+        this is only used if an aperture is applied.
+      @ aperture_radius Specifies the radius of the aperture in degrees; by default this is None,
+        indicating that no aperture should be used; otherwise the aperture is applied after
+        normalizing the images.
+      @ aperture_edge_width Specifies the width of the aperture edge in degrees; by default this is
+        None; if 0 or None, then no aperture edge is used.
+      @ normalized_pixels_per_degree Specifies the resolution of the images used in the calculation;
+        by default this is 15.
+
+    Output efferent values:
+      @ image_array Will be the 3D numpy array image stack; image_array[i,j,k] is the pixel in image
+        i, row j, column k
+      @ image_names Will be the list of image names in the same order as the images in image_array;
+        the names are derived from the keys of the stimulus_map.
+      @ pixel_centers Will be an r x c x 2 numpy matrix with units of degrees specifying the center
+        of each pixel (r is the number of rows and c is the number of columns).
     '''
-    calc_normalized_stimulus_images is a calculator that expects the 'stimulus_images' key from the
-    calculation data pool and provides the value 'normalized_stimulus_images', which will be a set
-    of images normalized to a particular size and resolution.
-    The following arguments may be provided to the resulting calculator, and must be provided if the
-    calc_stimulus_default_parameters calculator does not appear prior to this calculator in a calc
-    chain:
-      * stimulus_edge_value (0.5), the value outside the projected stimulus.
-      * stimulus_pixels_per_degree (24), the pixels per degree for the stimulus (may be a list)
-      * normalized_stimulus_aperture (150), the radius (in pixels) of the aperture to apply after
-        each image has been normalized
-      * normalized_pixels_per_degree (15), the number of pixels per degree in the normralized image
-    '''
+    # first, let's interpret our arguments
+    deg2px = float(pimms.mag(pixels_per_degree, 'px/deg'))
+    normdeg2px = float(pimms.mag(normalized_pixels_per_degree, 'px/deg'))
+    # we can get the zoom ratio from these
+    zoom_ratio = normdeg2px / deg2px
     # Zoom each image so that the pixels per degree is right:
-    imgs = [ndi.zoom(im, zoom_ratio, cval=ev) if zoom_ratio != 1 else im
-            for (im, d2p, nd2p, ev) in zip(imgs, deg2px, normdeg2px, edge_val)
-            for zoom_ratio in [float(nd2p)/float(d2p)]]
+    if np.isclose(zoom_ratio, 1):
+        imgs = stimulus_map
+    else:
+        imgs = {k:ndi.zoom(im, zoom_ratio, cval=background) for (k,im) in stimulus_map.iteritems()}
+    maxdims = [np.max([im.shape[i] for im in imgs.itervalues()]) for i in [0,1]]
     # Then apply the aperture
-    imgs = [image_apply_aperture(im, rad, fill_value=ev, edge_width=ew)
-            for (im, rad, ev, ew) in zip(imgs, normsz, edge_val, edge_width)]
-    # That's it! Make it an array because those are easier and we know every image will be the same size.
-    return {'normalized_stimulus_images': np.asarray(imgs)}
+    if aperture_radius is None:
+        aperture_radius = (0.5 * np.sqrt(np.dot(maxdims, maxdims))) / normdeg2px
+    if aperture_edge_width is None:
+        aperture_edge_width = 0
+    rad_px = 0
+    try: rad_px = pimms.mag(aperture_radius, 'deg') * normdeg2px
+    except:
+        try: rad_px = pimms.mag(aperture_radius, 'px')
+        except: raise ValuerError('aperture_radius given in unrecognized units')
+    aew_px = 0
+    try: aeq_px = pimms.mag(aperture_edge_width, 'deg') * normdeg2px
+    except:
+        try: aeq_px = pimms.mag(aperture_edge_width, 'px')
+        except: raise ValuerError('aperture_edge_width given in unrecognized units')
+    bg = background
+    imgs = {k:image_apply_aperture(im, rad_px, fill_value=bg, edge_width=aew_px)
+            for (k,im) in imgs.iteritems()}
+    # Separate out the images and names and
+    imar = np.asarray([imgs[k] for k in stimulus_ordering], dtype=np.float)
+    imar.setflags(write=False)
+    imnm = pyr.pvector(stimulus_ordering)
+    # Finally, note the pixel centers
+    (rs,cs) = (imar.shape[1], imar.shape[2])
+    x0 = (0.5*rs, 0.5*cs)
+    (r0s, c0s) = [(np.asarray(range(u)) - 0.5*u + 0.5) / deg2px for u in [rs,cs]]
+    pxcs = np.asarray([[(c,-r) for c in c0s] for r in r0s], dtype=np.float)
+    pxcs.setflags(write=False)
+    return {'image_array': imar, 'image_names': imnm, 'pixel_centers': pxcs}

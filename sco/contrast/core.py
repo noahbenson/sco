@@ -5,45 +5,13 @@
 
 import numpy                 as     np
 import numpy.matlib          as     npml
+import pyrsistent            as     pyr
 from   scipy                 import ndimage as ndi
-
 from   skimage.filters       import gabor_kernel
-
 from   types                 import (IntType, LongType)
+from   ..util                import (lookup_labels, units, global_lookup)
 
-from   ..core                import calculates
-from   ..normalization       import _turn_param_into_array
-
-@calculates()
-def calc_contrast_default_parameters(pRF_v123_labels, gabor_orientations=8,
-                                     Kay2013_normalization_r=1.0, Kay2013_normalization_s=.5):
-    '''
-    calc_contrast_default_parameters is a calculator that requires no arguments but sets the
-    following to a default if they are not provided:
-      * gabor_orientations (set to 8 by default)
-      * Kay2013_normalization_r (set to 1 by default)
-      * Kay2013_normalization_s (set to .5 by default)
-    If gabor_orientations is a list, then it is taken to be a list of the orientations (in radians),
-    and these orientations are used; if it is an integer, then evenly spaced orientations are used:
-    pi*k/n where k is in [0, n-1] and n is gabor_orientations.
-
-    The Kay2013_normalization parameters can be a single float, a list/array of float, or a
-    dictionary with 1, 2 and 3 as its keys and with floats as the values, specifying the values for
-    these parameters for voxels in areas V1, V2, and V3. This function will take these values and
-    form arrays that correspond to the other voxel-level arrays.
-    '''
-    if isinstance(gabor_orientations, (IntType, LongType)):
-        gabor_orientations = [np.pi * float(k)/float(gabor_orientations)
-                              for k in range(gabor_orientations)]
-    elif not hasattr(gabor_orientations, '__iter__'):
-        raise ValueError('gabor_orientations must be a list or an integer')
-    # That's all this needs to do for now. We want gabor_orientations to be an array, because that
-    # makes things easier.
-    return {'gabor_orientations':      np.asarray(gabor_orientations),
-            'Kay2013_normalization_r': _turn_param_into_array(Kay2013_normalization_r,
-                                                              pRF_v123_labels),
-            'Kay2013_normalization_s': _turn_param_into_array(Kay2013_normalization_s,
-                                                              pRF_v123_labels)}
+import pimms
 
 def scaled_gabor_kernel(cpp, theta=0, zero_mean=True, **kwargs):
     '''
@@ -54,6 +22,8 @@ def scaled_gabor_kernel(cpp, theta=0, zero_mean=True, **kwargs):
     should (or should not) be given a zero mean value. The gabor_kernel function alone does not do
     this, but scaled_gabor_kernel does this by default, unless zero_mean is set to False.
     '''
+    if pimms.is_quantity(cpp): cpp = cpp.to(units.cycle / units.px).m
+    if pimms.is_quantity(theta): theta = theta.to(units.rad).m
     kern = gabor_kernel(cpp, theta=theta, **kwargs)
     # First, zero-mean them
     if zero_mean:
@@ -62,144 +32,423 @@ def scaled_gabor_kernel(cpp, theta=0, zero_mean=True, **kwargs):
     (n,m) = kern.shape
     (cn,cm) = [0.5*(q - 1) for q in [n,m]]
     (costh, sinth) = (np.cos(theta), np.sin(theta))
-    mtx = (2*np.pi*cpp) * np.asarray(
-        [[costh*(col - cm) + sinth*(row - cn) for col in range(m)]
-         for row in range(n)])
-    return np.asarray(
-        (kern.real/np.sum(np.abs(kern.real * np.cos(mtx))))
-        + 1j*(kern.imag/np.sum(np.abs(kern.imag * np.sin(mtx)))))
+    mtx = (2*np.pi*cpp) * np.asarray([[costh*(col - cm) + sinth*(row - cn) for col in range(m)]
+                                      for row in range(n)])
+    re = kern.real / np.sum(np.abs(kern.real * np.cos(mtx)))
+    im = kern.imag / np.sum(np.abs(kern.imag * np.sin(mtx)))
+    return np.asarray(re + 1j*im)
 
-@calculates('stimulus_contrast_functions',
-            d2p='normalized_pixels_per_degree',
-            imgs='normalized_stimulus_images',
-            orients='gabor_orientations',
-            ev='stimulus_edge_value')
-def calc_stimulus_contrast_functions(imgs, d2p, orients, ev):
+@pimms.immutable
+class ImageArrayContrastFilter(object):
     '''
-    calc_stimulus_contrast_functions is a calculator that produces a value named 
-    'stimulus_contrast_functions' which an 1d array, each element of which, when given a frequency
-    (in cycles/degree), yields an image that has been transformed from the original
-    normalized_stimulus_images to a new image the same size in which each pixel represents the
-    contrast energy at that position and at the given frequency.
-    The function that is returned automatically caches the results from a call and returns them on
-    subsequent calls with the same frequency argument.
+    The ImageArrayContrastFilter class is a immutable class (using pimms) that is initialized with
+    a stack of images and various meta-data (see calc_contrast_images function); once initialized,
+    an object f can be called (f(cpd)) to produce a map whose keys are orientations (in radians) and
+    whose values are stacks of equivalent images filtered at the given frequency cpd.
     '''
-    _stimulus_contrast_cache = [{} for i in imgs]
-    # make sure there are lists where there should be
-    d2ps = d2p if hasattr(d2p, '__iter__') else [d2p for i in imgs]
-    evs  = ev  if hasattr(ev,  '__iter__') else [ev  for i in imgs]
-    # Now, the function that is called:
-    def _stimulus_contrast_function(k, cpd):
-        cache = _stimulus_contrast_cache[k]
-        # want to make sure that cpd is a float
-        cpd = float(cpd)
-        if isinstance(cpd, set):
-            return {x: _stimulus_contrast_function(k, x) for x in cpd}
-        elif hasattr(cpd, '__iter__'):
-            return [_stimulus_contrast_function(k, x) for x in cpd]
-        elif cpd in cache:
-            return cache[cpd]
+
+    def __init__(self, image_array, d2p, gabor_orientations, background):
+        self.image_array = image_array
+        self.pixels_per_degree = d2p
+        self.gabor_orientations = gabor_orientations
+        self.background = background
+    def __hash__(self):
+        return pimms.qhash((self.image_array,
+                            self.pixels_per_degree,
+                            self.gabor_orientations,
+                            self.background))
+    @pimms.param
+    def image_array(ims):
+        '''
+        f.image_array is the (numpy array) image stack tracked by the given ImageArrayContrastFilter
+        object f. The image array should always be a 3D numpy array.
+        '''
+        if not isinstance(ims, np.ndarray):
+            ims = np.array(ims, dtype=np.float)
+            ims.setflags(write=False)
+        elif not np.issubdtype(ims.dtype, np.float) or not ims.flags['WRITEABLE']:
+            ims = np.array(ims, dtype=np.float)
+            ims.setflags(write=False)
+        if len(ims.shape) != 3:
+            raise ValueError('image_array must be a stack of 2D images')
+        return ims
+    @pimms.param
+    def pixels_per_degree(d2p):
+        '''
+        f.pixels_per_degree is the number of pixels per degree in the visual field of the image
+        array tracked by the ImageArrayContrastFilter object f.
+        '''
+        d2p_unit = units.px / units.degree
+        d2p = d2p.to(d2p_unit) if pimms.is_quantity(d2p) else d2p * d2p_unit
+        return d2p
+    @pimms.param
+    def gabor_orientations(go):
+        '''
+        f.gabor_orientations is a read-only numpy array of the gabor orientations at which to
+        examine contrast; all elements are in radians.
+        '''
+        if not hasattr(go, '__iter__'):
+            go = np.asarray(range(go), dtype=np.float)
+            go *= np.pi / float(len(go))
+        urad = units.rad
+        go = urad * np.asarray([g.to(urad).m if pimms.is_quantity(g) else g for g in go],
+                               dtype=np.float)
+        go.setflags(write=False)
+        return go
+    @pimms.param
+    def background(bg):
+        '''
+        f.background is the contrast value (between 0 and 1) of the background that is used when
+        a filter extends beyond the range of the image. Usually this is 0.5 (gray).
+        '''
+        bg = float(bg)
+        if bg < 0 or bg > 1: raise ValueError('background must be in the range [0,1]')
+        return bg
+    def to_cycles_per_pixel(self, cpd):
+        '''
+        f.to_cycles_per_pixel(cpd) yields the given cpd value in cycles per pixel; if cpd has no
+        units it is assumed to be in units of cycles per degree. This uses the conversion factor
+        stored in f.pixels_per_degree to make any required conversion.
+        '''
+        cpp = None
+        if pimms.is_quantity(cpd):
+            try:    cpp = cpd.to(units.cycles / units.degree) / self.pixels_per_degree
+            except: cpp = None
+            if cpp is None:
+                try:    cpp = cpd.to(units.cycles / units.pixel)
+                except: raise ValueError('frequency must be in cycles/degree or cycles/pixel')
         else:
-            # switch to cycles per pixel
-            im = imgs[k]
-            cpp = cpd / d2ps[k]
-            c = evs[k]
-            kerns = [(kn.real, kn.imag)
-                     for th  in orients
-                     for kn  in [scaled_gabor_kernel(cpp, theta=th)]]
-            # The filtered orientations
-            filtered_orientations = {
-                th: np.sqrt(np.sum([ndi.convolve(im, kern_part, mode='constant', cval=c)**2
-                                    for kern_part in re_im_kern],
-                                   axis=0))
-                for (th, re_im_kern) in zip(orients, kerns)}
-            # now, collapse them down to a single filtered image
-            # filtered = np.sum(filtered_orientations.values(), axis=0)
-            # filtered_orientations.setflags(write=False)
-            cache[cpd] = filtered_orientations
-            return filtered_orientations
-    def _make_stim_contrast_fn(k):
-        """makes the stimulus contrast function for image k
+            cpp = (cpd * (units.cycles / units.degree)) / self.pixels_per_degree
+        # also, cast to float...
+        cpp = float(cpp.m) * cpp.u
+        return cpp
+    def __call__(self, cpd):
+        '''
+        f(cpd) yields an image stack identical in shape to f.image_array which has been filtered
+        at the given frequency cpd (in cycles per degree). The cpd argument may be in different
+        units as long as the units are annotated using pint. Valid units are 
+        {cycles/radians/degrees} per {degrees/radians/cycles, pixels}.
+        '''
+        cpp = self.to_cycles_per_pixel(cpd)
+        # we need to calculate a new set of filtered images...
+        # The filtered orientations
+        res = {}
+        bg = self.background
+        for th in self.gabor_orientations:
+            kerns = scaled_gabor_kernel(cpp.m, theta=th.m)
+            kerns = (kerns.real, kerns.imag)
+            rmtx = np.zeros(self.image_array.shape)
+            for (i,im) in enumerate(self.image_array):
+                rmtx[i, :, :] = np.sqrt(
+                    np.sum([ndi.convolve(im, k, mode='constant', cval=self.background)**2
+                            for k in kerns],
+                           axis=0))
+            rmtx.setflags(write=False)
+            res[th] = rmtx
+        return pyr.pmap(res)
 
-        This is necessary because of some weirdness in python scoping; it's neccessary to make sur
-        each function gets the right k.
-        """
-        return lambda f: _stimulus_contrast_function(k, f)
-    return {'stimulus_contrast_functions': np.asarray([_make_stim_contrast_fn(k)
-                                                       for k in range(len(imgs))])}
-
-
-@calculates('normalized_contrast_functions')
-def calc_divisive_normalization_functions(stimulus_contrast_functions,
-                                          normalized_stimulus_images,
-                                          stimulus_edge_value,
-                                          normalized_pixels_per_degree,
-                                          Kay2013_normalization_r,
-                                          Kay2013_normalization_s):
-    """
-    calc_divisive_normalization_functions is a calculator that produces a value named
-    'normalized_contrast_functions', which is a 2d array (voxels by images), each element of which
-    is a function which, when given a frequency (in cycles/degree), calls the corresponding
-    stimulus_contrast_function, gets the resulting energy image, and then divisively normalizes it
-    using the corresponding r and s values for the given voxel.
-
-    Kay2013_normalization_r and Kay2013_normalization_s can be a single value (in which case the
-    same value is used for each voxel), an array (in which case each voxel uses the corresponding
-    value), or a dictionary with 1, 2, and 3 as the keys (in which case each voxel uses the value
-    corresponding to its area, V1, V2, or V3).
-    """
-    _divisive_normalization_cache = [{} for i in stimulus_contrast_functions]
-
-    def _divisive_normalization_function(func_idx, cpd, vox_id):
-        cache = _divisive_normalization_cache[func_idx]
-        r     = Kay2013_normalization_r[vox_id]
-        s     = Kay2013_normalization_s[vox_id]
-        ev    = stimulus_edge_value[func_idx]
-        cpp   = cpd / normalized_pixels_per_degree[func_idx]
-        if (r, s) not in cache:
-            cache[(r, s)] = dict()
-        cache = cache[(r, s)]
-        if isinstance(cpd, set):
-            return {x: _divisive_normalization_function(func_idx, x, vox_id) for x in cpd}
-        elif hasattr(cpd, '__iter__'):
-            return [_divisive_normalization_function(func_idx, x, vox_id) for x in cpd]
-        elif cpd in cache:
-            return cache[cpd]
+@pimms.immutable
+class ImageArrayContrastView(object):
+    '''
+    The ImageArrayContrastView class is an immutable (via pimms) data structure that calculates and
+    stores the first-order contrast-base responses to an image array given a set of parameters
+    governing its divisive normalization scheme and a divisive normalization function itself. The
+    main purpose of this class is to handle caching of individual results and allow the divisive
+    normalization function definition itself to be very clean.
+    '''
+    def __init__(self, contrast_filter, freq, divnorm_fn, params):
+        self.contrast_filter = contrast_filter
+        self.frequency = freq
+        self.parameters = params
+        self.divisive_normalization_fn = divnorm_fn
+    def __hash__(self):
+        return hash((self.contrast_filter, self.frequency, self.parameters,
+                     self.divisive_normalization_fn))
+    @pimms.param
+    def frequency(cpd):
+        '''
+        rsp.frequency is the frequency at which the image array response results are calculated.
+        This may be in cycles per degree or cycles per pixel; alternately use rsp.cpd or rsp.cpp.
+        '''
+        if pimms.is_quantity(cpd):
+            org = cpd
+            try:    cpd = org.to(units.cycles / units.degree)
+            except: cpd = None
+            if cpd is None:
+                try:    cpd = org.to(units.cycles / units.pixel)
+                except: raise ValueError('frequency must be in cycles/degree or cycles/pixel')
         else:
-            func       = stimulus_contrast_functions[func_idx]
-            filtered   = func(cpd)
-            # for the denominator in our normalization step, we sum over all orientations. this is
-            # the step used in Kay2013a, but it's not clear whether this is ultimately the step we
-            # want to use.
-            imPOP = np.mean(filtered.values(), axis=0)
-            normalized = np.sum([(v**r)/(s**r + imPOP**r)
-                                 for v in filtered.itervalues()],
-                                axis=0)
-            normalized.setflags(write=False)
-            cache[cpd] = normalized
-            return normalized
-            # need to talk with Noah about this. I think if I'm understanding this correctly, I
-            # would need to just recreate that function, replacing it. Because it sums over all
-            # orientations and I need to normalize instead (so instead of np.sum, do something else
-            # there. So is the summation across orientations happening there or in pRF?)
-            
-            # So, change the stimulus_contrast_function to get the energy (as is now, DON'T sum
-            # across orientations). So each function will return a list of values, one for each
-            # orientation. This will take those in and normalize them (still returning a list of
-            # values). Then we'll sum across orientations in pRF or in a separate spatial summation
-            # step? Probably in pRF, but double check. And make pRF take
-            # normalized_contrast_functions (output from here) as its input instead of stimulus
-            # contrast functions (don't want to overwrite). In order to enable modularity,
-            # calc_chain has ability to rename variables. Will need to play around with that and
-            # add something to README.
-    def _make_norm_fn(func_idx, vox_idx):
-        """makes the normalized contrast function for function func_idx and voxel vox_idx
+            cpd = cpd * (units.cycles / units.degree)
+        # also, cast to float...
+        return float(cpd.m) * cpd.u
+    @pimms.param
+    def contrast_filter(f):
+        '''
+        rsp.contrast_filter is a ImageArrayContrastFilter object that stores the image_array over
+        which the object rsp calculates.
+        '''
+        if not isinstance(f, ImageArrayContrastFilter):
+            raise ValueError('contrast_filter must be an ImageArrayContrastFilter object')
+        return f
+    @pimms.value
+    def cpd(frequency, contrast_filter):
+        '''
+        rsp.cpd is the frequency in cycles-per-degree at which the image array response results are
+        calculated in the object rsp.
+        '''
+        ppd = contrast_filter.pixels_per_degree
+        return frequency if frequency.u == units.cycles/units.degree else frequency * ppd
+    @pimms.value
+    def cpp(frequency, contrast_filter):
+        '''
+        rsp.cpp is the frequency in cycles-per-pixel at which the image array response results are
+        calculated in the object rsp.
+        '''
+        ppd = contrast_filter.pixels_per_degree
+        return frequency if frequency.u == units.cycles/units.px else frequency / ppd
+    @pimms.param
+    def parameters(params):
+        '''
+        rsp.parameters is a pimms.itable object of the divisive normalization parameters (each row
+        of the itable is one parameterization) used in the calculation for the immage array response
+        object rsp. The parameters may be given to a response object as a list of maps or as an
+        itable.
+        '''
+        if pimms.is_itable(params):
+            return params
+        elif pimms.is_map(params):
+            tbl = pimms.itable(params)
+            # we want this to fail if it can't be transformed to rows
+            try: tbl.rows
+            except: raise ValueError('map could not be cast to itable')
+            return tbl
+        else:
+            tbl = {}
+            try:
+                p0 = params[0]
+                tbl = {k:[v] for (k,v) in p0.iteritems()}
+                for p in params[1:]:
+                    if len(p) != len(p0): raise ValueError()
+                    for (k,v) in p.iteritems(): tbl[k].append(v)
+                tbl = pimms.itable(tbl)
+                tbl.rows
+            except:
+                raise ValueError('parameters must be an itable, a map of columns, or a list of '
+                                 + 'parameter maps')
+            return tbl
+    @pimms.param
+    def divisive_normalization_fn(divnorm_fn):
+        '''
+        rsp.divisive_normalization_fn is the divisive normalization function that is used with the
+        given image array response object rsp. The function should accept exactly two arguments:
+         (1) a mapping of orientations (in radians) to 3D numpy arrays of images filtered at the
+             given orientation, and
+         (2) a mapping of parameter names to values for use in the normalization, which are passed
+             to the function via the ** operator--i.e., divisive_normalization_fn(omap, **params);
+        the function should return an array of contrast energy images.
+        '''
+        # currently no good checks...
+        if isinstance(divnorm_fn, basestring):
+            # check that we can look it up
+            try:
+                f = global_lookup(divnorm_fn)
+            except:
+                raise ValueError('divnorm_fn string must be the name of a function')
+            else:
+                if not hasattr(f, '__call__'): raise ValueError('divnorm_fn must be callable')
+        elif not hasattr(divnorm_fn, '__call__'): raise ValueError('divnorm_fn must be callable')
+        return divnorm_fn
+    @pimms.value
+    def contrast_energy(contrast_filter, parameters, frequency, divisive_normalization_fn):
+        '''
+        rsp.contrast_energy is a 3D array of divisively-normalized contrast energy at the frequency
+        given by rsp.frequency using the divisive normalization parameters in rsp.parameters. These
+        data are stored in an n x r x c matrix where r x c is the image size and n is the number of
+        images in the image array stored by the rsp.contrast_filter object.
+        '''
+        # see if we need to lookup the divnorm fn
+        if isinstance(divisive_normalization_fn, basestring):
+            dnfn = global_lookup(divisive_normalization_fn)
+        # we'll build this up with unique parameterizations
+        res = {}
+        # get the images filtered at the appropriate frequency
+        filt = contrast_filter(frequency)
+        # call the divisive normalization for each parameter... cache results as we go...
+        for p in parameters.rows:
+            if p not in res:
+                res[p] = dnfn(filt, **p)
+        return pyr.pmap(res)
+    
+@pimms.calc('contrast_filter', memoize=True)
+def calc_contrast_filter(image_array, normalized_pixels_per_degree, gabor_orientations, background):
+    '''
+    calc_contrast is a calculator that takes as input a normalized image stack and various parameter
+    data and produces an object of type ImageArrayContrastFilter, contrast_filterm an object that
+    can be called as contrast_filter(frequency) to yield a map whose keys are gabor orientations (in
+    radians) and whose values are image stacks with identical shapes as image_array but that have
+    been filtered at the key's orientation and the frequency.
 
-        This is necessary because of some weirdness in python scoping; it's neccessary to make sure
-        each function gets the right indexes.
-        """
-        return lambda cpd: _divisive_normalization_function(func_idx, cpd, vox_idx)
-    return {'normalized_contrast_functions':
-            np.asarray([[_make_norm_fn(func_idx, vox_id)
-                         for func_idx, _ in enumerate(stimulus_contrast_functions)]
-                        for vox_id, _ in enumerate(Kay2013_normalization_r)])}
+    Required afferent values:
+      * image_array
+      * normalized_pixels_per_degree
+      * gabor_orientations
+      * background
+
+    Efferent output values:
+      @ contrast_filter Will be an object of type ImageArrayContrastFilter that can filter the image
+        array at arbitrary frequencies and divisive normalization parameters.
+    '''
+    # all the parameter checking and transformation is handled in this class
+    return ImageArrayContrastFilter(image_array,         normalized_pixels_per_degree,
+                                    gabor_orientations,  background)
+
+@pimms.calc('contrast_energies', cache=True)
+def calc_contrast_energies(contrast_filter,
+                           divisive_normalization_function, divisive_normalization_parameters,
+                           cpd_sensitivities):
+    '''
+    calc_contrast_energies is a calculator that performs divisive normalization on the filtered
+    contrast images and yields a nested map of contrast energy arrays; contrast_energies map has
+    keys that are spatial frequencies (in cycles per degree) and whose values are maps; these maps
+    have keys that are parameter value maps and whose values are the 3D contrast energy arrays.
+
+    Required afferent parameters:
+      * contrast_filter
+      * divisive_normalization_function, divisive_normalization_parameters
+      * cpd_sensitivities
+
+    Output efferent values:
+      @ contrast_energies Will be a nested map whose first level of keys are persistent-maps of the
+        divisive normalization parameters and whose second level of keys are a set of frequencies;
+        the values at the second level are the stacks of contrast energy images for the particular
+        divisive normalization parameters and frequencies specified in the keys.
+    '''
+    # first, calculate the contrast energies at each frequency for all images then we combine them;
+    # since this reuses images internally when the parameters are the same, it shouldn't be too
+    # inefficient:
+    divnfn = divisive_normalization_function
+    params = divisive_normalization_parameters
+    all_cpds = np.unique([k.to(units.cycle/units.deg).m if pimms.is_quantity(k) else k
+                          for s in cpd_sensitivities for k in s.iterkeys()])
+    all_cpds = all_cpds * (units.cycles / units.degree)
+    rsps = {cpd:ImageArrayContrastView(contrast_filter, cpd, divnfn, params).contrast_energy
+            for cpd in all_cpds}
+    # flip this around...
+    flip = {}
+    for (k0,v0) in rsps.iteritems():
+        for (k1,v1) in v0.iteritems():
+            if k1 not in flip: flip[k1] = {}
+            flip[k1][k0] = v1
+    rsps = pyr.pmap({k:pyr.pmap(v) for (k,v) in flip.iteritems()})
+    return {'contrast_energies': rsps}
+
+@pimms.calc('contrast_constants', cache=True)
+def calc_contrast_constants(labels, contrast_constants_by_label):
+    '''
+    calc_contrast_constants is a calculator that translates contrast_constants_by_label into a
+    numpy array of contrast constants using the labels parameter.
+
+    Required afferent parameters:
+      * labels
+      @ contrast_constants_by_label Must be a map whose keys are label values and whose values are
+        the variance-like contrast constant for that particular area; all values appearing in the
+        pRF labels must be found in this map.
+
+    Provided efferent parameters:
+      @ contrast_constants Will be an array of values, one per pRF, of the contrast constants.
+    '''
+    r = np.asarray(lookup_labels(labels, contrast_constants_by_label), dtype=np.float)
+    r.setflags(write=False)
+    return r
+
+@pimms.calc('pRF_SOC', cache=True)
+def calc_pRF_SOC(pRFs, contrast_energies, cpd_sensitivities,
+                 divisive_normalization_parameters, contrast_constants,
+                 normalized_pixels_per_degree):
+    '''
+    calc_pRF_SOC is a calculator that is responsible for calculating the individual SOC responses
+    of the pRFs by extracting their pRFs from the contrast_energies and weighting them according
+    to the cpd_sensitivities.
+
+    Required afferent parameters:
+      * pRFS
+      * contrast_energies
+      * cpd_sensitivities
+      * divisive_normalization_parameters
+
+    Provided efferent parameters:
+      @ pRF_SOC Will be an array of the second-order-contrast energies, one per pRF per image;
+        these will be stored in an (n x m) matrix where n is the number of pRFs and m is the
+        number of images.
+    '''
+    d2p = normalized_pixels_per_degree
+    d2p = d2p.to(units.px/units.deg) if pimms.is_quantity(d2p) else d2p*(units.px/units.deg)
+    params = divisive_normalization_parameters
+    n = len(next(next(contrast_energies.itervalues()).itervalues()))
+    m = len(pRFs)
+    imshape = next(next(contrast_energies.itervalues()).itervalues()).shape[1:3]
+    imlen = imshape[0] * imshape[1]
+    socs = np.zeros((m, n))
+    # we want to avoid numerical mismatch, so we round the keys to the nearest 10^-5
+    def chop(x):
+        x = float(x.to(units.cycle/units.degree).m if pimms.is_quantity(x) else x)
+        return np.round(x, 5)
+    contrast_energies = {k0:{chop(k):v for (k,v) in v0.iteritems()}
+                         for (k0,v0) in contrast_energies.iteritems()}
+    for (i,prf,p,ss,c) in zip(range(m), pRFs, params.rows, cpd_sensitivities, contrast_constants):
+        wts = None
+        uu = None
+        for (cpd, w) in ss.iteritems():
+            cpd = chop(cpd)
+            if wts is None:
+                (u,wts) = prf(contrast_energies[p][cpd], d2p, c=None)
+                uu = np.zeros(u.shape)
+            else:
+                u = prf(contrast_energies[p][cpd], d2p, c=None, weights=False)[0]
+            uu += w * u
+        # Here is the SOC formula: (x - c<x>)^2
+        wts = npml.repmat(wts, len(uu), 1)
+        mu = np.sum(wts * uu, axis=1)
+        socs[i,:] = np.sum(wts * (uu - c*npml.repmat(mu, uu.shape[1], 1).T)**2, axis=1)
+    socs.setflags(write=False)
+    return socs
+
+@pimms.calc('compressive_constants', cache=True)
+def calc_compressive_constants(labels, compressive_constants_by_label):
+    '''
+    calc_compressive_constants is a calculator that translates compressive_constants_by_label into a
+    numpy array of compressive constants using the labels parameter.
+
+    Required afferent parameters:
+      * labels
+      @ compressive_constants_by_label Must be a map whose keys are label values and whose values are
+        the compressive output exponent for that particular area; all values appearing in the
+        pRF labels must be found in this map.
+
+    Provided efferent parameters:
+      @ compressive_constants Will be an array of compressive output exponents, one per pRF.
+    '''
+    r = np.asarray(lookup_labels(labels, compressive_constants_by_label), dtype=np.float)
+    r.setflags(write=False)
+    return r
+
+@pimms.calc('prediction', cache=True)
+def calc_compressive_nonlinearity(pRF_SOC, compressive_constants):
+    '''
+    calc_compressive_nonlinearity is a calculator that applies a compressive nonlinearity to the
+    predicted second-order-contrast responses of the pRFs. If the compressive constant is n is and
+    the SOC response is s, then the result here is simply s ** n.
+
+    Required afferent parameters:
+      * pRF_SOC
+      * compressive_constants
+
+    Provided efferent values:
+      @ prediction Will be the final predictions of %BOLD-change for each pRF examined, up to gain.
+        The data will be stored in an (n x m) matrix where n is the number of pRFs (see labels,
+        hemispheres, cortex_indices) and m is the number of images.
+    '''
+    out = np.asarray([s**n for (s, n) in zip(pRF_SOC, compressive_constants)])
+    out.setflags(write=False)
+    return out
+    

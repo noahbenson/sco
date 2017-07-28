@@ -14,13 +14,12 @@ and one may be obtained from the StimulusImage class or from a custom class that
 StimulusBase class.
 '''
 
-from ..core import calc_chain
-from .core  import (import_stimulus_images, calc_stimulus_default_parameters,
-                    calc_normalized_stimulus_images, image_apply_aperture)
+import pyrsistent as pyr
+import pimms
+from .core  import (calc_gamma_correction, import_stimuli, calc_images)
 
-stimulus_chain = (('calc_stimulus_default_parameters', calc_stimulus_default_parameters),
-                  ('import_stimulus',                  import_stimulus_images),
-                  ('calc_normalized_stimulus',         calc_normalized_stimulus_images))
-
-calc_stimulus = calc_chain(stimulus_chain)
-
+# Make a function that's ready to be used as a module
+stimulus_plan_data = pyr.m(gamma_correction  = calc_gamma_correction,
+                           import_stimuli    = import_stimuli,
+                           images            = calc_images)
+stimulus_plan = pimms.plan(stimulus_plan_data)

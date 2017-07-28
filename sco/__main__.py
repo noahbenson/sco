@@ -7,7 +7,7 @@ import os, sys, math, tempfile, tarfile
 import pysistence
 
 from neuropythy.util import CommandLineParser
-from sco import (calc_sco, export_predicted_responses)
+from sco import (build_model)
 
 main_parser = CommandLineParser(
     [('h', 'help',      'help',              False),
@@ -71,8 +71,9 @@ def main(argv):
     # Arg 0 is a subject; arg 1 is a directory of images
     sub = _check_extract(args[0], True)
     imfiles = [a for arg in args[1:] for a in _check_extract(arg)]
-    r = calc_sco(opts, subject=sub, stimulus_image_filenames=imfiles)
-    export_predicted_responses(r, export_path=opts['output_dir'])
+    mdl = build_model('benson17')
+    r = mdl(opts, subject=sub, stimulus_image_filenames=imfiles)
+    r['exported_files']
     return 0
 
 # Run the main function

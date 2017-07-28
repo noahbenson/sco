@@ -3,13 +3,21 @@
 # pRF-related calculations for the standard cortical observer library.
 # By Noah C. Benson
 
-from ..core import (calc_chain)
-from .core  import (calc_pRF_default_parameters, calc_pRF_views, PRFSpec,
-                    calc_pRF_frequency_preferences)
+'''
+The sco.pRF module contains calculation plans for producing PRFSpec objects, which track the data
+for each pRF involved in the sco calculation and can extract and sum over regions from images.
+'''
 
-pRF_chain = (('calc_pRF_default_parameters',    calc_pRF_default_parameters),
-             ('calc_pRF_frequency_preferences', calc_pRF_frequency_preferences),
-             ('calc_pRF_views',                 calc_pRF_views))
+import pyrsistent as pyr
+import pimms
+from .core  import (calc_compressive_constants, calc_pRF_sigmas, calc_pRF_centers,
+                    calc_pRFs, calc_cpd_sensitivities, PRFSpec)
 
-calc_pRF = calc_chain(pRF_chain)
+pRF_plan_data = pyr.m(compressive_constants = calc_compressive_constants,
+                      pRF_sigmas            = calc_pRF_sigmas,
+                      pRF_centers           = calc_pRF_centers,
+                      pRFs                  = calc_pRFs,
+                      cpd_sensitivites      = calc_cpd_sensitivities)
+
+pRF_plan = pimms.plan(pRF_plan_data)
 

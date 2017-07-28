@@ -5,18 +5,22 @@
 
 '''
 The sco.contrast module of the standard cortical observer library is responsible for calculating the
-second order contrast present in the normalized stimulus images. In general, these functions work
-in a lazy fashion, by returning a function that, when called, calculates and returns the result.
+first- and second-order contrast present in the normalized stimulus image array.
 '''
 
-from ..core import calc_chain
-from .core  import (calc_contrast_default_parameters, calc_stimulus_contrast_functions,
-                    calc_divisive_normalization_functions)
+import pyrsistent as _pyr
+import pimms as _pimms
+from .core import (ImageArrayContrastView,        ImageArrayContrastFilter,
+                   calc_contrast_filter,          calc_contrast_constants,
+                   calc_contrast_energies,        calc_compressive_constants,
+                   calc_compressive_nonlinearity, calc_pRF_SOC)
 
-contrast_chain = (('calc_contrast_default_parameters', calc_contrast_default_parameters),
-                  ('calc_stimulus_contrast_functions', calc_stimulus_contrast_functions),
-                  ('calc_divisive_normalization_functions', calc_divisive_normalization_functions))
+contrast_plan_data = _pyr.m(contrast_constants       = calc_contrast_constants,
+                            compressive_constants    = calc_compressive_constants,
+                            contrast_filter          = calc_contrast_filter,
+                            contrast_energies        = calc_contrast_energies,
+                            pRF_SOC                  = calc_pRF_SOC,
+                            compressive_nonlinearity = calc_compressive_nonlinearity)
 
-calc_contrast = calc_chain(contrast_chain)
-
+contrast_plan = _pimms.plan(contrast_plan_data)
 
