@@ -60,8 +60,8 @@ def build_model(model_name, force_exports=False):
 
 # Version information...
 _version_major = 0
-_version_minor = 3
-_version_micro = 6
+_version_minor = 4
+_version_micro = 0
 __version__ = "%s.%s.%s" % (_version_major, _version_minor, _version_micro)
 
 description = 'Predict the response of the cortex to visual stimuli'
