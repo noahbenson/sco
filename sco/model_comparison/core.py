@@ -10,11 +10,26 @@ import os
 import inspect
 import re
 import pickle
-import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 from scipy import io as sio
+
+# These requirements are optional as far as SCO is concerned, so they are given slightly more
+# useful error messages that indicate the library may not be installed.
+# --nben 03/06/2018
+try:
+    import matplotlib.pyplot as plt
+except:
+    raise RuntimeError('Could not import matplotlib.pyplot; make sure matplotlib is installed')
+
+try:
+    import seaborn as sns
+except:
+    raise RuntimeError('Could not import seaborn; make sure seaborn is installed')
+
+try:
+    import pandas as pd
+except:
+    raise RuntimeError('Could not import pandas; make sure pandas is installed')
 
 
 # We need to define these before our MODEL_DF_KEYS constant below

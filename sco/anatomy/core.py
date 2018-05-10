@@ -5,14 +5,13 @@
 
 import numpy                 as     np
 import neuropythy            as     neuro
-import neuropythy.freesurfer as     neurofs
+import neuropythy.commands   as     neurocmd
 import nibabel               as     nib
 import nibabel.freesurfer    as     fs
 import pyrsistent            as     pyr
 
 import pimms, os, sys, warnings
 
-from   neuropythy.commands   import benson14_retinotopy_command
 from   ..util                import (lookup_labels, units, import_mri, apply_affine)
 
 @pimms.calc('freesurfer_subject', memoize=True)
@@ -27,12 +26,12 @@ def import_freesurfer_subject(subject):
     '''
     if isinstance(subject, basestring):
         subject = neuro.freesurfer_subject(subject)
-    if not isinstance(subject, neurofs.Subject):
+    if not isinstance(subject, neuro.Subject):
         raise ValueError('Value given for subject is neither a string nor a neuropythy subject')
     return subject
 
 @pimms.calc('cortex_affine')
-def import_freesurfer_affine(freesurfer_subject, modality='volume'):
+def import_freesurfer_affine(freesurfer_subject, modality='surface'):
     '''
     import_freesurfer_affine is a calculation that imports the affine transform associated with a
     freesurfer subject's volumes.
@@ -52,16 +51,16 @@ def import_freesurfer_affine(freesurfer_subject, modality='volume'):
     '''
     raff = None
     try:
-        raff = freesurfer_subject.LH.ribbon.affine
+        raff = freesurfer_subject.mgh_images['lh.ribbon'].affine
     except:
-        raff = freesurfer_subject.RH.ribbon.affine
+        raff = freesurfer_subject.mgh_images['rh.ribbon'].affine
     if modality.lower() == 'volume':
         return raff
     elif modality.lower() == 'surface':
         try:
-            tkr = freesurfer_subject.LH.ribbon.header.get_vox2ras_tkr()
+            tkr = freesurfer_subject.mgh_images['lh.ribbon'].header.get_vox2ras_tkr()
         except:
-            tkr = freesurfer_subject.RH.ribbon.header.get_vox2ras_tkr()
+            tkr = freesurfer_subject.mgh_images['rh.ribbon'].header.get_vox2ras_tkr()
         return np.dot(raff, np.linalg.inv(tkr))
     else:
         raise ValueError('Unknown modality: %s' % modality)
@@ -69,7 +68,7 @@ def import_freesurfer_affine(freesurfer_subject, modality='volume'):
 @pimms.calc('polar_angles', 'eccentricities', 'labels', 'hemispheres',
             'cortex_indices', 'cortex_coordinates')
 def import_benson14_from_freesurfer(freesurfer_subject, max_eccentricity,
-                                    modality='volume', import_filter=None):
+                                    modality='surface', import_filter=None):
     '''
     import_benson14_from_freesurfer is a calculation that imports (or creates then imports) the
     Benson et al. (2014) template of retinotopy for the subject, whose neuropythy.freesurfer
@@ -110,18 +109,18 @@ def import_benson14_from_freesurfer(freesurfer_subject, max_eccentricity,
     subject = freesurfer_subject
     if modality.lower() == 'volume':
         # make sure there are template volume files that match this subject
-        ang = os.path.join(subject.directory, 'mri', 'benson14_angle.mgz')
-        ecc = os.path.join(subject.directory, 'mri', 'benson14_eccen.mgz')
-        lab = os.path.join(subject.directory, 'mri', 'benson14_varea.mgz')
+        ang = os.path.join(subject.path, 'mri', 'benson14_angle.mgz')
+        ecc = os.path.join(subject.path, 'mri', 'benson14_eccen.mgz')
+        lab = os.path.join(subject.path, 'mri', 'benson14_varea.mgz')
         if not os.path.exists(ang) or not os.path.exists(ecc) or not os.path.exists(lab):
             # Apply the template first...
-            benson14_retinotopy_command(subject.directory)
+            neurocmd.benson14_retinotopy.main(subject.path)
         if not os.path.exists(ang) or not os.path.exists(ecc) or not os.path.exists(lab):        
             raise ValueError('No areas template found/created for subject: ' + lab)
         angle_mgz = fs.mghformat.load(ang)
         eccen_mgz = fs.mghformat.load(ecc)
         label_mgz = fs.mghformat.load(lab)
-        ribbon_mgzs = (subject.LH.ribbon, subject.RH.ribbon)
+        ribbon_mgzs = (subject.mgh_images['lh.ribbon'], subject.mgh_images['rh.ribbon'])
         # The variables are all mgz volumes, so we need to extract the values:
         labels = np.round(np.abs(label_mgz.dataobj.get_unscaled()))
         angles = angle_mgz.dataobj.get_unscaled()
@@ -148,27 +147,25 @@ def import_benson14_from_freesurfer(freesurfer_subject, max_eccentricity,
         rx = freesurfer_subject.RH.midgray_surface.coordinates.T
         lx = freesurfer_subject.LH.midgray_surface.coordinates.T
         # make sure there are template volume files that match this subject
-        lang = os.path.join(subject.directory, 'surf', 'lh.benson14_angle.mgz')
-        lecc = os.path.join(subject.directory, 'surf', 'lh.benson14_eccen.mgz')
-        llab = os.path.join(subject.directory, 'surf', 'lh.benson14_varea.mgz')
-        rang = os.path.join(subject.directory, 'surf', 'rh.benson14_angle.mgz')
-        recc = os.path.join(subject.directory, 'surf', 'rh.benson14_eccen.mgz')
-        rlab = os.path.join(subject.directory, 'surf', 'rh.benson14_varea.mgz')
+        lang = os.path.join(subject.path, 'surf', 'lh.benson14_angle.mgz')
+        lecc = os.path.join(subject.path, 'surf', 'lh.benson14_eccen.mgz')
+        llab = os.path.join(subject.path, 'surf', 'lh.benson14_varea.mgz')
+        rang = os.path.join(subject.path, 'surf', 'rh.benson14_angle.mgz')
+        recc = os.path.join(subject.path, 'surf', 'rh.benson14_eccen.mgz')
+        rlab = os.path.join(subject.path, 'surf', 'rh.benson14_varea.mgz')
+        (lang,lecc,llab,rang,recc,rlab) = [
+            flnm if os.path.isfile(flnm) else flnm[:-4]
+            for flnm in (lang,lecc,llab,rang,recc,rlab)]
         if not os.path.exists(lang) or not os.path.exists(rang) or \
            not os.path.exists(lecc) or not os.path.exists(recc) or \
            not os.path.exists(llab) or not os.path.exists(rlab):
             # Apply the template first...
-            benson14_retinotopy_command(subject.directory)
+            neurocmd.benson14_retinotopy.main(subject.path)
         if not os.path.exists(lang) or not os.path.exists(rang) or \
            not os.path.exists(lecc) or not os.path.exists(recc) or \
            not os.path.exists(llab) or not os.path.exists(rlab):
             raise ValueError('No anatomical template found/created for subject')
-        lang = fs.mghformat.load(lang).dataobj.get_unscaled().flatten()
-        lecc = fs.mghformat.load(lecc).dataobj.get_unscaled().flatten()
-        llab = fs.mghformat.load(llab).dataobj.get_unscaled().flatten()
-        rang = fs.mghformat.load(rang).dataobj.get_unscaled().flatten()
-        recc = fs.mghformat.load(recc).dataobj.get_unscaled().flatten()
-        rlab = fs.mghformat.load(rlab).dataobj.get_unscaled().flatten()
+        (lang,lecc,llab,rang,recc,rlab) = [neuro.load(fl) for fl in (lang,lecc,llab,rang,recc,rlab)]
         llab = np.round(np.abs(llab))
         rlab = np.round(np.abs(rlab))
         (angs0, eccs, labs) = [np.concatenate([ldat, rdat], axis=0)
@@ -179,7 +176,11 @@ def import_benson14_from_freesurfer(freesurfer_subject, max_eccentricity,
         idcs    = idcs[valid]
         coords  = np.concatenate([lx, rx], axis=0)[valid]
         hemis   = np.concatenate([[1 for a in lang], [-1 for a in rang]], axis=0)[valid]
-        angles  = angs0[valid]*hemis
+        # old versions of the template had positive numbers in both hemispheres...
+        if np.mean(angs0[valid[hemis == -1]]) > 0:
+            angles  = angs0[valid]*hemis
+        else:
+            angles = angs0[valid]
         eccens  = eccs[valid]
         labels  = np.asarray(labs[valid], dtype=np.int)
     else:
@@ -213,8 +214,10 @@ def import_retinotopy_data_files(polar_angle_filename, eccentricity_filename, la
                                  hemisphere_filename=None, import_filter=None,
                                  max_eccentricity=None):
     '''
+
     import_retinotopy_data_files is a calculation that imports retinotopic map data from a set of
-    filenames. The filenames must be MGH (*.mgh, *.mgz) or NifTI (*.nii, *.nii.gz) files, and must
+    filenames. The filenames must be MGH (*.mgh, *.mgz) or NifTI (*.nii, *.nii.gz) files, or
+    optionally FreeSurfer morph-data files for surface modality, and must
     correspond to the appropriate data file. Each filename may optionally be given as a tuple 
     (lh_filename, rh_filename), in which case the hemisphere is deduced from the file; if a single
     filename is given for each, then either the polar angle data must be negative for the left
@@ -229,9 +232,6 @@ def import_retinotopy_data_files(polar_angle_filename, eccentricity_filename, la
     surface volume. The predictions volume that results always has the same dimensionality as the
     input volume, but the 4th dimension is the number of predictions.
     
-    The polar angle and eccentricity data 
-    
-
     Required afferent parameters:
       @ polar_angle_filename Must give the filename (or an (lh_filename, rh_filename) tuple) of the
         polar angle volume for the model to use; this volume's values must be in units of degrees,
@@ -312,7 +312,7 @@ def import_retinotopy_data_files(polar_angle_filename, eccentricity_filename, la
         # there are negative labels or if a hemispheres file is given
         if -1 in np.unique(np.sign(angs)):
             hemis = np.sign(angs)
-        elif -1 in np.unique(lbl_sngs):
+        elif -1 in np.unique(lbl_sgns):
             hemis = lbl_sgns[aids]
         elif hemisphere_filename is not None:
             hemis = import_mri(hemisphere_filename)[aids]
@@ -406,7 +406,7 @@ def export_predicted_responses(predicted_responses,
     fill = float(export_fill_value)
     imorder = predicted_responses.keys()
     if modality.lower() == 'volume':
-        vol0 = freesurfer_subject.LH.ribbon
+        vol0 = freesurfer_subject.mgh_images['lh.ribbon']
         vol0dims = vol0.get_data().shape
         preds = np.full(vol0dims + (len(predicted_responses),), fill, dtype=np.float32)
         for (n,imk) in enumerate(imorder):

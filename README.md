@@ -60,7 +60,7 @@ mdl.afferents
 
 # Ask it which parameters have default values (and what they are):
 # (note that a pmap is a kind of persistent dict object)
-mdl.params
+mdl.defaults
 # => pmap({'contrast_constants_by_label': 'sco.impl.benson17.contrast_constants_by_label_Kay2013',
 # =>       'normalized_pixels_per_degree': 12, 'gabor_orientations': 8,
 # =>       'pRF_n_radii': 3.0, 'aperture_radius': None, 'output_prefix': '',

@@ -13,7 +13,7 @@ from sco.util import units, import_mri, nearest_indices, apply_affine
 @pimms.calc('measurements', 'measurement_indices',
             'measurement_coordinates', 'measurement_hemispheres',
             cache=True)
-def import_measurements(measurements_filename):
+def import_measurements(measurements_filename=None):
     '''
     import_measurements is a calculator that imports measured data from a given filename or pair
     of filenames (in the case of surface modalities), and converts them into a matrix of
@@ -145,7 +145,30 @@ def calc_correspondence_maps(coordinates, cortex_indices, hemispheres, modality,
     cind = np.asarray([(i,j) for (i,j) in mpp.iteritems() if j in ppm and ppm[j] == i],
                       dtype=np.int).T
     return (mpp, ppm, cind)
-    
+
+@pimms.calc('measurement_labels', 'measurement_pRFs', 'measurement_polar_angles',
+            'measurement_eccentricities', cache=True)
+def calc_correspondence_data(corresponding_indices, labels, pRFs, polar_angles, eccentricities,
+                             measurement_indices):
+    '''
+    calc_correspondence_data is a calculator that yields measurement data translations for various
+    data that exist for predictions (such as retintopy).    
+    '''
+    if corresponding_indices is None:
+        return (None, None, None, None)
+    n = len(measurement_indices)
+    (pidcs, midcs) = corresponding_indices
+    mlabs = np.full(n, 0, dtype=np.int32)
+    mprfs = np.full(n, None, dtype=np.object)
+    mangs = np.full(n, np.nan, dtype=np.float32)
+    meccs = np.full(n, np.nan, dtype=np.float32)
+    mlabs[midcs] = labels[pidcs]
+    mprfs[midcs] = pRFs[pidcs]
+    mangs[midcs] = polar_angles[pidcs]
+    meccs[midcs] = eccentricities[pidcs]
+    for m in [mlabs, mprfs, mangs, meccs]:
+        m.setflags(write=False)
+    return (mlabs, mprfs, mangs, meccs)
 
 @pimms.calc('prediction_analysis', 'prediction_analysis_labels', memoize=True)
 def calc_prediction_analysis(prediction, measurements, labels, hemispheres, pRFs,
@@ -231,3 +254,4 @@ def calc_prediction_analysis(prediction, measurements, labels, hemispheres, pRFs
         except: res[lbl] = np.nan
     # That's it!
     return (pyr.pmap(res), pyr.pmap({k:pyr.pvector(v) for (k,v) in lbls.iteritems()}))
+    

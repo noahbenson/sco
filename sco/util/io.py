@@ -5,9 +5,9 @@
 
 import numpy as np
 import pyrsistent as pyr
+import json
 import os, pimms, sys
 import nibabel, nibabel.freesurfer.mghformat as fsmgh
-import matplotlib.pyplot as plt
 
 from .plot import (cortical_image, corrcoef_image, report_image)
 
@@ -68,8 +68,8 @@ def export_anatomical_data(data, sub, anat_ids, hemis, name, output_dir,
         raise ValueError('anatomical id (%d) and data (%d) sizesmust match' % (
             len(anat_ids), len(data)))
     if dtype is None: dtype = data.dtype
-    if np.issubdtype(dtype, np.int) and not np.isfinite(null): null = 0
-    affine = sub.LH.ribbon.affine
+    if np.issubdtype(dtype, np.dtype(int).type) and not np.isfinite(null): null = 0
+    affine = sub.mgh_images['lh.ribbon'].affine
     file_names = []
     if modality == 'surface':
         for (hname, hid) in [('lh', 1), ('rh', -1)]:
@@ -77,8 +77,12 @@ def export_anatomical_data(data, sub, anat_ids, hemis, name, output_dir,
             hidcs = np.where(hemis == hid)[0]
             n = hobj.vertex_count
             if np.issubdtype(dtype, np.float64): dtype = np.float32
-            vol = np.full((1,1,n,data.shape[1]), null, dtype=dtype)
-            vol[0,0,anat_ids[hidcs],:] = data[hidcs,:]
+            if data.shape[1] == 1:
+                vol = np.full((1,1,n), null, dtype=dtype)
+                vol[0,0,anat_ids[hidcs]] = data[hidcs,0]
+            else:
+                vol = np.full((1,1,n,data.shape[1]), null, dtype=dtype)
+                vol[0,0,anat_ids[hidcs],:] = data[hidcs,:]
             #img = nibabel.Nifti2Image(vol, np.eye(4))
             #fnm = make_fname(hname + '.', 'nii.gz')
             img = fsmgh.MGHImage(vol, np.eye(4))
@@ -86,7 +90,7 @@ def export_anatomical_data(data, sub, anat_ids, hemis, name, output_dir,
             img.to_filename(fnm)
             file_names.append(fnm)
     elif modality == 'volume':
-        vol = np.full(sub.LH.ribbon.shape + (data.shape[1],), null, dtype=dtype)
+        vol = np.full(sub.mgh_images['lh.ribbon'].shape + (data.shape[1],), null, dtype=dtype)
         for ((i,j,k),row) in zip(anat_ids, data): vol[i,j,k,:] = row
         img = nibabel.Nifti1Image(vol, affine)
         fnm = make_fname('', 'nii.gz')
@@ -98,13 +102,13 @@ def export_anatomical_data(data, sub, anat_ids, hemis, name, output_dir,
 
 @pimms.calc('exported_predictions_filenames')
 def export_predictions(prediction, cortex_indices, modality, hemispheres, freesurfer_subject,
-                       labels, image_names, output_directory,
+                       labels, image_names, output_directory='.',
                        create_directories=False, output_prefix='', output_suffix=''):
     '''
     export_predictions is a calc that exports the prediction data in from the sco calculation, which
        must come from sco.sco_plan(...) or similar; at the least it must contain the data documented
        below. The return value is a set of filenames exported.
-    
+
     Required afferent values:
       * prediction:         the prediction matrix
       * cortex_indices:     the voxel indices or vertex ids
@@ -112,7 +116,8 @@ def export_predictions(prediction, cortex_indices, modality, hemispheres, freesu
       * modality:           'surface' or 'volume'
       * labels:             the anatomical labels
       * freesurfer_subject: the freesurfer subject object
-      * output_directory:   the directory to which to write the results
+      @ output_directory (default: '.') the directory to which to write the results; if None, then
+        uses the current directory (.).
 
     Options:
       * create_directories (default: False) if True, will create the directory if it does not exist;
@@ -144,14 +149,13 @@ def export_predictions(prediction, cortex_indices, modality, hemispheres, freesu
     return pyr.pvector(fnms)
 
 @pimms.calc('exported_analysis_filenames')
-def export_analysis(output_directory,
-                    prediction_analysis, prediction_analysis_labels,
+def export_analysis(prediction_analysis, prediction_analysis_labels, output_directory='.',
                     create_directories=False, output_prefix='', output_suffix=''):
     '''
     export_evaluations is a calculator that exports the evaluation data in the calc plan, which
        must come from sco.sco_plan(...) or similar; at the least it must contain the data documented
        below. The return value is a set of filenames exported.
-    
+
     Required afferent values:
       * prediction_analysis and prediction_analysis_labels: the analysis of the predicted versus
         measurements data (from sco.analysis)
@@ -191,10 +195,10 @@ def export_analysis(output_directory,
             tup = tup + (n, rval)
             f.write(fmt % tup)
     return pyr.v(filename)
-        
+
 @pimms.calc('exported_report_filenames')
-def export_report_images(labels, pRFs, max_eccentricity, output_directory,
-                         prediction_analysis, measurements,
+def export_report_images(labels, pRFs, max_eccentricity,
+                         prediction_analysis, measurements, output_directory='.',
                          create_directories=False, output_prefix='', output_suffix=''):
     '''
     export_report_images is a calculator that takes a prediction analysis
@@ -203,7 +207,7 @@ def export_report_images(labels, pRFs, max_eccentricity, output_directory,
 
     Note that this calculator does nothing and simply yields None if the measurements or
     prediction_analysis values are not found; these have default values.
-    
+
     Required afferent values:
       * output_directory, the directory to which to write the results
 
@@ -221,6 +225,12 @@ def export_report_images(labels, pRFs, max_eccentricity, output_directory,
     Provided efferent values:
       @ exported_report_filenames Will be a list of filenames of analysis images exported.
     '''
+    try:
+        import matplotlib.pyplot as plt
+    except:
+        raise RuntimeError('Could not import matplotlib.pyplot; matplotlib may not be installed')
+
+    
     if prediction_analysis is None or measurements is None: return None
     (output_prefix, output_suffix) = _sco_init_outputs(output_directory, create_directories,
                                                        output_prefix, output_suffix)
@@ -230,7 +240,8 @@ def export_report_images(labels, pRFs, max_eccentricity, output_directory,
     fnms = [fnm]
     plt.close(f)
     for l in np.unique(labels):
-        fnm = os.path.join(output_directory, output_prefix + ('v%dcorr' % l) + output_suffix + '.png')
+        fnm = os.path.join(output_directory,
+                           output_prefix + ('v%dcorr' % l) + output_suffix + '.png')
         fnms.append(fnm)
         f = corrcoef_image(prediction_analysis, measurements, labels, pRFs, max_eccentricity,
                            visual_area=l)
@@ -238,10 +249,50 @@ def export_report_images(labels, pRFs, max_eccentricity, output_directory,
         plt.close(f)
     return pyr.pvector(fnms)
 
+@pimms.calc('exported_vega')
+def export_vega(prediction_analysis, prediction_analysis_labels,
+                prediction, measurements, corresponding_indices, output_directory='.',
+                create_directories=False, output_prefix='', output_suffix=''):
+    '''
+    export_vega is a pimms calculation that takes mostly analyzed data and exports a vega-lite file
+    rendering a histogram of the accuracies.
+    '''
+    (output_prefix,output_suffix) = ['' if x is None else x for x in (output_prefix,output_suffix)]
+    if measurements is None: return (None, None)
+    (pidcs,midcs) = corresponding_indices
+    idcs = prediction_analysis_labels[pyr.m(hemi='lh',label=1)]
+    pidcs = pidcs[idcs]
+    midcs = midcs[idcs]
+    prediction   = prediction[pidcs]
+    measurements = measurements[midcs]
+    rs = np.asarray([np.corrcoef(p,m)[0,1] for (p,m) in zip(prediction, measurements)])
+    json_spec_fnm = os.path.join(output_directory,
+                            output_prefix + 'vega-corthist-spec' + output_suffix + '.json')
+    json_fnm  = os.path.join(output_directory,
+                            output_prefix + 'vega-corthist' + output_suffix + '.json')
+    vega_spec = '''
+      {"$schema": "https://vega.github.io/schema/vega-lite/v2.json",
+       "data": {"url": "%s"},
+       "mark": "bar",
+       "encoding": {
+         "x": {
+           "bin": {"maxbins": 10},
+           "field": "correlation",
+           "type": "quantitative"},
+         "y": {
+           "aggregate": "count",
+           "type": "quantitative"}}}
+      '''
+    with open(json_spec_fnm, 'w') as f: f.write(vega_spec % json_fnm)
+    with open(json_fnm, 'w') as f:
+        json.dump([{'pid':p, 'mid':m, 'correlation':r} for (p,m,r) in zip(midcs,pidcs,rs)], f)
+    return True
+
 @pimms.calc('exported_files')
 def calc_exported_files(exported_report_filenames,
                         exported_analysis_filenames,
-                        exported_predictions_filenames):
+                        exported_predictions_filenames,
+                        exported_vega):
     '''
     calc_exported_files is a calculation object that simply accumulates the files exported by
       various other functions in the sco.util package (specifically sco.util.io) and stores the list

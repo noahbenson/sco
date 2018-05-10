@@ -108,6 +108,8 @@ class PRFSpec(object):
         rrng = (max([rrng0[0], 0]), min([rrng0[1], imshape[0].m]))
         crng = (max([crng0[0], 0]), min([crng0[1], imshape[1].m]))
         if any(s[1] - s[0] <= 0 for s in [rrng, crng]):
+            print (self.center, self.sigma, self.exponent, self.n_radii)
+            print (imshape, d2p, dst, rrng0, rrng, crng0, crng)
             raise ValueError('Bad image or std given to PRFSpec._params()')
         return (x0, rad, dst, rrng, crng, rrng0, crng0)
     def _weights(self, x0, rad, rrng, crng):
@@ -119,7 +121,11 @@ class PRFSpec(object):
         # We can trim off the extras now...
         min_w = np.exp(-0.5 * self.n_radii * self.n_radii)
         wmtx[wmtx < min_w] = 0.0
-        wmtx /= wmtx.sum()
+        wtot = wmtx.sum()
+        if np.isclose(wtot, 0):
+            wmtx *= 0
+        else:
+            wmtx /= wtot
         return wmtx
     def matrix(self, imshape, d2p):
         '''
@@ -219,15 +225,15 @@ def calc_compressive_constants(labels, compressive_constants_by_label):
     n.setflags(write=False)
     return n
 
-@pimms.calc('pRF_sigmas', 'pRF_sigma_slopes', memoize=True, cache=True)
-def calc_pRF_sigmas(labels, eccentricities, pRF_sigma_slopes_by_label):
+@pimms.calc('pRF_sigmas', 'pRF_sigma_slopes', 'pRF_sigma_offsets', memoize=True, cache=True)
+def calc_pRF_sigmas(labels, eccentricities, pRF_sigma_slopes_by_label, pRF_sigma_offsets_by_label):
     '''
     calc_pRF_sigmas is a calculator that combines the labels with the data in
     pRF_sigma_slopes_by_label to pRF_sigma_slopes, one slope per sigma; it also uses the
     eccentricity to determine the predicted sigma as well in pRF_sigmas.
 
     This calculation uses a simple formula:
-      pRF_sigma = 1/2 + m[label] * eccentricity
+      pRF_sigma = b[label] + m[label] * eccentricity
     where m[label] is the slope of the pRF size (vs eccentricity) in terms of the visual area label.
     The slopes, m, are given in the parameter pRF_sigma_slope_by_label.
 
@@ -238,14 +244,20 @@ def calc_pRF_sigmas(labels, eccentricities, pRF_sigma_slopes_by_label):
 
     Provided efferent values:
       @ pRF_sigma_slopes Will be an array of values, one per pRF, of the sigma slope parameter;
-        these parameters are used to predict pRF sigma values.
+        these parameters are used to predict pRF sigma values. (This value is m in the formula
+        sigma = m * eccentricity + b.)
+      @ pRF_sigma_offsets Will be an array of values, one per pRF, of the sigma offset parameter;
+        these parameters are used to predict pRF sigma values. (This value is b in the formula
+        sigma = m * eccentricity + b.)
       @ pRF_sigmas Will be set to an array of values, one per pRF, of the sigma parameter of each.
     '''
-    ms = np.asarray(lookup_labels(labels, pRF_sigma_slopes_by_label), dtype=np.float)
-    sigs = 0.5*units.degree + eccentricities * ms
+    ms = np.asarray(lookup_labels(labels, pRF_sigma_slopes_by_label),  dtype=np.float)
+    bs = np.asarray(lookup_labels(labels, pRF_sigma_offsets_by_label), dtype=np.float)
+    sigs = bs*units.degree + eccentricities*ms
     sigs.setflags(write=False)
     ms.setflags(write=False)
-    return (sigs, ms)
+    bs.setflags(write=False)
+    return (sigs, ms, bs)
         
 @pimms.calc('pRF_centers', memoize=True, cache=True)
 def calc_pRF_centers(polar_angles, eccentricities):

@@ -10,6 +10,7 @@ from   scipy                 import ndimage as ndi
 from   skimage.filters       import gabor_kernel
 from   types                 import (IntType, LongType)
 from   ..util                import (lookup_labels, units, global_lookup)
+from   .spyr                 import spyr_filter
 
 import pimms
 
@@ -47,16 +48,36 @@ class ImageArrayContrastFilter(object):
     whose values are stacks of equivalent images filtered at the given frequency cpd.
     '''
 
-    def __init__(self, image_array, d2p, gabor_orientations, background):
+    def __init__(self, image_array, d2p, gabor_orientations, background,
+                 spatial_gabors=False, bandwidth=None):
         self.image_array = image_array
         self.pixels_per_degree = d2p
         self.gabor_orientations = gabor_orientations
         self.background = background
+        self.spatial_gabors = spatial_gabors
+        self.bandwidth = bandwidth
     def __hash__(self):
         return pimms.qhash((self.image_array,
                             self.pixels_per_degree,
                             self.gabor_orientations,
                             self.background))
+    @pimms.param
+    def spatial_gabors(sg):
+        '''
+        f.spatial_gabors is either True or False indicating whether the given 
+        ImageArrayContrastFilter object f is using spatial gabors (True) or the steerable pyramid
+        (False).
+        '''
+        return True if sg else False
+    @pimms.param
+    def bandwidth(bw):
+        '''
+        f.bandwidth is either None if using spatial_gabors (f.spatial_gabors is True); otherwise,
+        is the bandwidth of each spatial frequency band used by the steerable pyramid.
+        '''
+        if not pimms.is_real(bw) or bw <= 0:
+            raise ValueError('bandwidth must be a positive real number')
+        return bw
     @pimms.param
     def image_array(ims):
         '''
@@ -64,10 +85,10 @@ class ImageArrayContrastFilter(object):
         object f. The image array should always be a 3D numpy array.
         '''
         if not isinstance(ims, np.ndarray):
-            ims = np.array(ims, dtype=np.float)
+            ims = np.array(ims, dtype=np.dtype(float).type)
             ims.setflags(write=False)
-        elif not np.issubdtype(ims.dtype, np.float) or not ims.flags['WRITEABLE']:
-            ims = np.array(ims, dtype=np.float)
+        elif not np.issubdtype(ims.dtype, np.dtype(float).type) or not ims.flags['WRITEABLE']:
+            ims = np.array(ims, dtype=np.dtype(float).type)
             ims.setflags(write=False)
         if len(ims.shape) != 3:
             raise ValueError('image_array must be a stack of 2D images')
@@ -88,11 +109,11 @@ class ImageArrayContrastFilter(object):
         examine contrast; all elements are in radians.
         '''
         if not hasattr(go, '__iter__'):
-            go = np.asarray(range(go), dtype=np.float)
+            go = np.asarray(range(go), dtype=np.dtype(float).type)
             go *= np.pi / float(len(go))
         urad = units.rad
         go = urad * np.asarray([g.to(urad).m if pimms.is_quantity(g) else g for g in go],
-                               dtype=np.float)
+                               dtype=np.dtype(float).type)
         go.setflags(write=False)
         return go
     @pimms.param
@@ -122,7 +143,7 @@ class ImageArrayContrastFilter(object):
         # also, cast to float...
         cpp = float(cpp.m) * cpp.u
         return cpp
-    def __call__(self, cpd):
+    def __call__(self, cpd, bandwidth=1):
         '''
         f(cpd) yields an image stack identical in shape to f.image_array which has been filtered
         at the given frequency cpd (in cycles per degree). The cpd argument may be in different
@@ -135,14 +156,19 @@ class ImageArrayContrastFilter(object):
         res = {}
         bg = self.background
         for th in self.gabor_orientations:
-            kerns = scaled_gabor_kernel(cpp.m, theta=th.m)
-            kerns = (kerns.real, kerns.imag)
-            rmtx = np.zeros(self.image_array.shape)
-            for (i,im) in enumerate(self.image_array):
-                rmtx[i, :, :] = np.sqrt(
-                    np.sum([ndi.convolve(im, k, mode='constant', cval=self.background)**2
-                            for k in kerns],
-                           axis=0))
+            if self.spatial_gabors:
+                kerns = scaled_gabor_kernel(cpp.m, theta=pimms.mag(th, 'rad'))
+                kerns = (kerns.real, kerns.imag)
+                rmtx = np.zeros(self.image_array.shape)
+                for (i,im) in enumerate(self.image_array):
+                    rmtx[i, :, :] = np.sqrt(
+                        np.sum([ndi.convolve(im, k, mode='constant', cval=self.background)**2
+                                for k in kerns],
+                               axis=0))
+            else:
+                rmtx = np.sqrt(spyr_filter(self.image_array, pimms.mag(th, 'rad'),
+                                           cpd, bandwidth,
+                                           len(self.gabor_orientations)))
             rmtx.setflags(write=False)
             res[th] = rmtx
         return pyr.pmap(res)
@@ -280,7 +306,9 @@ class ImageArrayContrastView(object):
         return pyr.pmap(res)
     
 @pimms.calc('contrast_filter', memoize=True)
-def calc_contrast_filter(image_array, normalized_pixels_per_degree, gabor_orientations, background):
+def calc_contrast_filter(image_array, pixels_per_degree, normalized_pixels_per_degree,
+                         gabor_orientations, background,
+                         cpd_sensitivities, use_spatial_gabors=False):
     '''
     calc_contrast is a calculator that takes as input a normalized image stack and various parameter
     data and produces an object of type ImageArrayContrastFilter, contrast_filterm an object that
@@ -293,14 +321,23 @@ def calc_contrast_filter(image_array, normalized_pixels_per_degree, gabor_orient
       * normalized_pixels_per_degree
       * gabor_orientations
       * background
+      @ use_spatial_gabors Must be either True (use spatial gabor filters instead of the steerable
+        pyramid) or False (use the steerable pyramid); by default this is False.
 
     Efferent output values:
       @ contrast_filter Will be an object of type ImageArrayContrastFilter that can filter the image
         array at arbitrary frequencies and divisive normalization parameters.
     '''
+    if normalized_pixels_per_degree is None: normalized_pixels_per_degree = pixels_per_degree
+    all_cpds = np.unique([k.to(units.cycle/units.deg).m if pimms.is_quantity(k) else k
+                          for s in cpd_sensitivities for k in s.iterkeys()])
+    # find this difference...
+    bw = np.mean(np.abs(all_cpds[1:] - all_cpds[:-1]) / all_cpds[:-1])
     # all the parameter checking and transformation is handled in this class
     return ImageArrayContrastFilter(image_array,         normalized_pixels_per_degree,
-                                    gabor_orientations,  background)
+                                    gabor_orientations,  background,
+                                    spatial_gabors=use_spatial_gabors,
+                                    bandwidth=bw)
 
 @pimms.calc('contrast_energies', cache=True)
 def calc_contrast_energies(contrast_filter,
@@ -331,8 +368,9 @@ def calc_contrast_energies(contrast_filter,
     all_cpds = np.unique([k.to(units.cycle/units.deg).m if pimms.is_quantity(k) else k
                           for s in cpd_sensitivities for k in s.iterkeys()])
     all_cpds = all_cpds * (units.cycles / units.degree)
-    rsps = {cpd:ImageArrayContrastView(contrast_filter, cpd, divnfn, params).contrast_energy
-            for cpd in all_cpds}
+    rsps = {cpd:vw.contrast_energy
+            for cpd in all_cpds
+            for vw in [ImageArrayContrastView(contrast_filter, cpd, divnfn, params)]}
     # flip this around...
     flip = {}
     for (k0,v0) in rsps.iteritems():
@@ -357,14 +395,14 @@ def calc_contrast_constants(labels, contrast_constants_by_label):
     Provided efferent parameters:
       @ contrast_constants Will be an array of values, one per pRF, of the contrast constants.
     '''
-    r = np.asarray(lookup_labels(labels, contrast_constants_by_label), dtype=np.float)
+    r = np.asarray(lookup_labels(labels, contrast_constants_by_label), dtype=np.dtype(float).type)
     r.setflags(write=False)
     return r
 
 @pimms.calc('pRF_SOC', cache=True)
 def calc_pRF_SOC(pRFs, contrast_energies, cpd_sensitivities,
                  divisive_normalization_parameters, contrast_constants,
-                 normalized_pixels_per_degree):
+                 pixels_per_degree, normalized_pixels_per_degree):
     '''
     calc_pRF_SOC is a calculator that is responsible for calculating the individual SOC responses
     of the pRFs by extracting their pRFs from the contrast_energies and weighting them according
@@ -381,6 +419,7 @@ def calc_pRF_SOC(pRFs, contrast_energies, cpd_sensitivities,
         these will be stored in an (n x m) matrix where n is the number of pRFs and m is the
         number of images.
     '''
+    if normalized_pixels_per_degree is None: normalized_pixels_per_degree = pixels_per_degree
     d2p = normalized_pixels_per_degree
     d2p = d2p.to(units.px/units.deg) if pimms.is_quantity(d2p) else d2p*(units.px/units.deg)
     params = divisive_normalization_parameters
@@ -428,7 +467,7 @@ def calc_compressive_constants(labels, compressive_constants_by_label):
     Provided efferent parameters:
       @ compressive_constants Will be an array of compressive output exponents, one per pRF.
     '''
-    r = np.asarray(lookup_labels(labels, compressive_constants_by_label), dtype=np.float)
+    r = np.asarray(lookup_labels(labels, compressive_constants_by_label), dtype=np.dtype(float).type)
     r.setflags(write=False)
     return r
 

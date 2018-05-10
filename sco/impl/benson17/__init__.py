@@ -10,10 +10,11 @@ defined; this may be included in any SCO plan to ensure that the optional parame
 available to the downstream calculations if not provided by the user or other calculations.
 '''
 
-import pyrsistent              as _pyr
-import pimms                   as _pimms
-import numpy                   as _np
-from   sco.util   import units as _units
+import pyrsistent                                    as _pyr
+import pimms                                         as _pimms
+import numpy                                         as _np
+from   sco.util                     import units     as _units
+from   neuropythy.vision.retinotopy import pRF_data  as _neuropythy_pRF_data
 
 import sco.anatomy
 import sco.stimulus
@@ -45,6 +46,23 @@ def divisively_normalize_Heeger1992(data, divisive_exponent=0.5, saturation_cons
     normalized.setflags(write=False)
     return normalized
 
+def divisively_normalize_Heeger1992_square(data, divisive_exponent=1, saturation_constant=1.0):
+    '''
+    Same as "divisively_normalize_Heeger1992", but squares data before divisive normalization and
+    sums across orientations for the surround term.
+    '''
+    data = {key: pow(value,2) for key, value in data.items()}
+    surround = _np.sum(data.values(), axis=0)
+    s = saturation_constant
+    r = divisive_exponent
+    den = (s**r + surround**r)
+    num = _np.zeros(surround.shape)
+    for v in data.itervalues(): num += v**r
+    num /= len(data)
+    normalized = num / den
+    normalized.setflags(write=False)
+    return normalized
+
 def divisively_normalize_naive(data, divisive_exponent=0.5, saturation_constant=1.0):
     '''
     divisively_normalize_naive(data) yields the 3D image array that is the result of divisively
@@ -53,6 +71,28 @@ def divisively_normalize_naive(data, divisive_exponent=0.5, saturation_constant=
     divisive normalization step does nothing, just averages and returns.
     '''
     return _np.mean(data.values(), axis=0)
+
+def divisively_normalize_spatialfreq(data, divisive_exponent=2, saturation_constant=0.1):
+    '''
+    Divisively normalizes data taking into account the previous and following spatial frequency level. 
+    Data is the 4D decomposition of an image into spatial frequencies and orientations, such as the result 
+    of the steerable pyramid transform.
+
+    Author: Chrysa Papadaniil <chrysa@nyu.edu>
+    '''
+    numlevels = data.shape[0]
+    s = saturation_constant
+    r = divisive_exponent
+    normalizers = np.sum(data, axis=1)
+    normalized = np.full(data.shape, 0.0)
+    normalized[0] = data[0]**r / ((normalizers[0]+normalizers[1])**r + s**r)
+    normalized[numlevels-1] = data[numlevels-1]**r/((normalizers[numlevels-1]+normalizers[numlevels-2])**r+s**r)
+    inter_levels=range(1,numlevels-1)
+    for level in (inter_levels):
+        normalizer = normalizers[level] + normalizers[level+1] + normalizers[level-1]
+        normalized[level] = (data[level])**r/(normalizer**r+s**r)
+    normalized.setflags(write=False)
+    return normalized
 
 @_pimms.calc('divisive_normalization_parameters', 'divisive_normalization_function', cache=True)
 def calc_divisive_normalization(labels, saturation_constants_by_label, divisive_exponents_by_label,
@@ -90,23 +130,46 @@ def calc_divisive_normalization(labels, saturation_constants_by_label, divisive_
     '''
     sat = sco.util.lookup_labels(labels, saturation_constants_by_label)
     rxp = sco.util.lookup_labels(labels, divisive_exponents_by_label)
-    if divisive_normalization_schema.lower() == 'heeger1992':
-        fn_name = '.divisively_normalize_Heeger1992'
-    elif divisive_normalization_schema.lower() == 'naive':
-        fn_name = '.divisively_normalize_naive'
-    else: raise ValueError('Unrecognized div-norm schema; must be \'Heeger1992\' or \'naive\'')
+    tr = {'heeger1992':        '.divisively_normalize_Heeger1992',
+          'naive':             '.divisively_normalize_naive',
+          'sfreq':             '.divisively_normalize_spatialfreq',
+          'square':            '.divisively_normalize_Heeger1992_square',
+          'heeger1992_square': '.divisively_normalize_Heeger1992_square'}
+    dns = divisive_normalization_schema.lower()
     return (_pimms.itable(saturation_constant=sat, divisive_exponent=rxp),
-            __name__ + fn_name)
+            (__name__ + tr[dns]) if dns in tr else dns)
 
 # Parameters Defined by Labels #####################################################################
-pRF_sigma_slopes_by_label_Kay2013      = _pyr.pmap({1:0.10, 2:0.15, 3:0.27})
-contrast_constants_by_label_Kay2013    = _pyr.pmap({1:0.93, 2:0.99, 3:0.99})
-compressive_constants_by_label_Kay2013 = _pyr.pmap({1:0.18, 2:0.13, 3:0.12})
-saturation_constants_by_label_Kay2013  = _pyr.pmap({1:0.50, 2:0.50, 3:0.50})
-divisive_exponents_by_label_Kay2013    = _pyr.pmap({1:1.00, 2:1.00, 3:1.00})
+visual_area_names_by_label = _pyr.pmap({1:'V1', 2:'V2', 3:'V3', 4:'hV4'})
+visual_area_labels_by_name = _pyr.pmap({v:k for (k,v) in visual_area_names_by_label.iteritems()})
+pRF_sigma_slopes_by_label_Kay2013      = _pyr.pmap(
+    {1:_neuropythy_pRF_data['kay2013']['v1' ]['m'],
+     2:_neuropythy_pRF_data['kay2013']['v2' ]['m'],
+     3:_neuropythy_pRF_data['kay2013']['v3' ]['m'],
+     4:_neuropythy_pRF_data['kay2013']['hv4']['m']})
+pRF_sigma_offsets_by_label_Kay2013     = _pyr.pmap(
+    {1:_neuropythy_pRF_data['kay2013']['v1' ]['b'],
+     2:_neuropythy_pRF_data['kay2013']['v2' ]['b'],
+     3:_neuropythy_pRF_data['kay2013']['v3' ]['b'],
+     4:_neuropythy_pRF_data['kay2013']['hv4']['b']})
+pRF_sigma_slopes_by_label_Wandell2015  = _pyr.pmap(
+    {1:_neuropythy_pRF_data['wandell2015']['v1' ]['m'],
+     2:_neuropythy_pRF_data['wandell2015']['v2' ]['m'],
+     3:_neuropythy_pRF_data['wandell2015']['v3' ]['m'],
+     4:_neuropythy_pRF_data['wandell2015']['hv4']['m']})
+pRF_sigma_offsets_by_label_Wandell2015 = _pyr.pmap(
+    {1:_neuropythy_pRF_data['wandell2015']['v1' ]['b'],
+     2:_neuropythy_pRF_data['wandell2015']['v2' ]['b'],
+     3:_neuropythy_pRF_data['wandell2015']['v3' ]['b'],
+     4:_neuropythy_pRF_data['wandell2015']['hv4']['b']})
+contrast_constants_by_label_Kay2013    = _pyr.pmap({1:0.93, 2:0.99, 3:0.99, 4:0.95})
+compressive_constants_by_label_Kay2013 = _pyr.pmap({1:0.18, 2:0.13, 3:0.12, 4:0.115})
+saturation_constants_by_label_Kay2013  = _pyr.pmap({1:0.50, 2:0.50, 3:0.50, 4:0.50})
+divisive_exponents_by_label_Kay2013    = _pyr.pmap({1:1.00, 2:1.00, 3:1.00, 4:1.00})
+gains_by_label_Benson2017              = _pyr.pmap({1:1.00, 2:1.00, 3:1.00, 4:1.00})
 # Some experimental parameters by labels
-ones_by_label  = _pyr.pmap({1:1.0, 2:1.0,3:1.0})
-zeros_by_label = _pyr.pmap({1:0.0, 2:0.0,3:0.0})
+ones_by_label  = _pyr.pmap({1:1.0, 2:1.0, 3:1.0, 4:1.0})
+zeros_by_label = _pyr.pmap({1:0.0, 2:0.0, 3:0.0, 4:1.0})
 
 # Frequency Sensitivity ############################################################################
 #_sensitivity_frequencies_cpd = _pimms.quant(_np.asarray([0.75 * 2.0**(0.5 * k) for k in range(6)]),
@@ -114,8 +177,15 @@ zeros_by_label = _pyr.pmap({1:0.0, 2:0.0,3:0.0})
 #_sensitivity_frequencies_cpd = _pimms.quant(_np.asarray([5, 3.5355, 2.5000, 1.7678, 1.2500, 0.8839,
 #                                                         0.6250, 0.4419, 0.3125]),
 #                                            'cycles/deg')
-_sensitivity_frequencies_cpd = _pimms.quant(_np.asarray([0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 6.0]),
-                                            'cycles/deg')
+#_sensitivity_frequencies_cpd = _pimms.quant(_np.asarray([0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 6.0]),
+#                                            'cycles/deg')
+#_sensitivity_frequencies_cpd = _pimms.quant(
+#    _np.asarray(_np.exp(_np.log(18.0)/6.0 * _np.asarray(range(1,8)) - _np.log(3.0))),
+#    'cycles/deg')
+_sensitivity_frequencies_cpd = _pimms.quant(
+    _np.asarray(_np.exp(0.5 * _np.asarray(range(1,8)) - 1.5)),
+    'cycles/deg')
+
 _cpd_sensitivity_cache = {}
 def cpd_sensitivity(e, s, l):
     '''
@@ -150,20 +220,22 @@ def cpd_sensitivity(e, s, l):
         wtot = _np.sum(res.values())
         res = {k:(v/wtot) for (k,v) in res.iteritems()}
     res = _pyr.pmap(res)
-    _cpd_sensitivity_cache[s] = res
+    _cpd_sensitivity_cache[e] = res
     return res
 
 # Default Options ##################################################################################
 # The default options are provided here for the SCO
 @_pimms.calc('benson17_default_options_used')
 def provide_default_options(
-        pRF_sigma_slopes_by_label      = 'sco.impl.benson17.pRF_sigma_slopes_by_label_Kay2013',
+        pRF_sigma_slopes_by_label      = 'sco.impl.benson17.pRF_sigma_slopes_by_label_Wandell2015',
+        pRF_sigma_offsets_by_label     = 'sco.impl.benson17.pRF_sigma_offsets_by_label_Wandell2015',
         contrast_constants_by_label    = 'sco.impl.benson17.contrast_constants_by_label_Kay2013',
         compressive_constants_by_label = 'sco.impl.benson17.compressive_constants_by_label_Kay2013',
         saturation_constants_by_label  = 'sco.impl.benson17.saturation_constants_by_label_Kay2013',
         divisive_exponents_by_label    = 'sco.impl.benson17.divisive_exponents_by_label_Kay2013',
+        gains_by_label                 = 'sco.impl.benson17.gains_by_label_Benson2017',
         max_eccentricity               = 12,
-        modality                       = 'volume',
+        modality                       = 'surface',
         cpd_sensitivity_function       = 'sco.impl.benson17.cpd_sensitivity',
         gabor_orientations             = 8):
     '''
@@ -172,14 +244,16 @@ def provide_default_options(
     these parameter values or the default ones for any not provided.
  
     These options are:
-      * pRF_sigma_slope_by_label (sco.impl.benson17.pRF_sigma_slope_by_label_Kay2013)
-      * compressive_constant_by_label (sco.impl.benson17.compressive_constant_by_label_Kay2013)
-      * contrast_constant_by_label (sco.impl.benson17.contrast_constant_by_label_Kay2013)
-      * modality ('volume')
+      * pRF_sigma_slopes_by_label (sco.impl.benson17.pRF_sigma_slopes_by_label_Wandell2015)
+      * pRF_sigma_offsets_by_label (sco.impl.benson17.pRF_sigma_offsets_by_label_Wandell2015)
+      * compressive_constants_by_label (sco.impl.benson17.compressive_constants_by_label_Kay2013)
+      * contrast_constants_by_label (sco.impl.benson17.contrast_constants_by_label_Kay2013)
+      * modality ('surface')
       * max_eccentricity (12)
       * cpd_sensitivity_function (sco.impl.benson17.cpd_sensitivity)
-      * saturation_constant (sco.impl.benson17.saturation_constant_Kay2013)
-      * divisive_exponent (sco.impl.benson17.divisive_exponent_Kay2013)
+      * saturation_constant_by_label (sco.impl.benson17.saturation_constants_by_label_Kay2013)
+      * divisive_exponent_by_label (sco.impl.benson17.divisive_exponents_by_label_Kay2013)
+      * gains_by_label (sco.impl.benson17.divisive_exponent_Kay2013)
       * gabor_orientations (8)
     '''
     # the defaults are filled-in by virtue of being in the above argument list

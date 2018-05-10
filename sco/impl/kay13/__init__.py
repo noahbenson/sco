@@ -47,7 +47,7 @@ def provide_default_options(
         saturation_constants_by_label  = saturation_constants_by_label_Kay2013,
         divisive_exponents_by_label    = divisive_exponents_by_label_Kay2013,
         max_eccentricity               = 7.5,
-        modality                       = 'volume',
+        modality                       = 'surface',
         cpd_sensitivity_function       = cpd_sensitivity,
         gabor_orientations             = 8):
     '''
@@ -59,7 +59,7 @@ def provide_default_options(
       * pRF_sigma_slope_by_label (sco.impl.benson17.pRF_sigma_slope_by_label_Kay2013)
       * compressive_constant_by_label (sco.impl.benson17.compressive_constant_by_label_Kay2013)
       * contrast_constant_by_label (sco.impl.benson17.contrast_constant_by_label_Kay2013)
-      * modality ('volume')
+      * modality ('surface')
       * max_eccentricity (12)
       * cpd_sensitivity_function (sco.impl.benson17.cpd_sensitivity)
       * saturation_constant (sco.impl.benson17.saturation_constant_Kay2013)

@@ -76,7 +76,7 @@ def import_stimulus(stim, gcf):
     return im
 
 @pimms.calc('stimulus_map', 'stimulus_ordering', cache=True)
-def import_stimuli(stimulus, gamma_correction_function=None):
+def import_stimuli(stimulus, gamma_correction_function):
     '''
     import_stimuli is a calculation that ensures that the stimulus images to be used in the sco
     calculation are properly imported.
@@ -179,7 +179,7 @@ def calc_images(pixels_per_degree, stimulus_map, stimulus_ordering,
                 background=0.5,
                 aperture_radius=None,
                 aperture_edge_width=None,
-                normalized_pixels_per_degree=12):
+                normalized_pixels_per_degree=None):
     '''
     calc_images() is a the calculation that converts the imported_stimuli value into the normalized
     images value.
@@ -200,7 +200,7 @@ def calc_images(pixels_per_degree, stimulus_map, stimulus_ordering,
       @ aperture_edge_width Specifies the width of the aperture edge in degrees; by default this is
         None; if 0 or None, then no aperture edge is used.
       @ normalized_pixels_per_degree Specifies the resolution of the images used in the calculation;
-        by default this is 15.
+        by default this is the same as pixels_per_degree.
 
     Output efferent values:
       @ image_array Will be the 3D numpy array image stack; image_array[i,j,k] is the pixel in image
@@ -212,7 +212,10 @@ def calc_images(pixels_per_degree, stimulus_map, stimulus_ordering,
     '''
     # first, let's interpret our arguments
     deg2px = float(pimms.mag(pixels_per_degree, 'px/deg'))
-    normdeg2px = float(pimms.mag(normalized_pixels_per_degree, 'px/deg'))
+    if normalized_pixels_per_degree is None:
+        normdeg2px = deg2px
+    else:
+        normdeg2px = float(pimms.mag(normalized_pixels_per_degree, 'px/deg'))
     # we can get the zoom ratio from these
     zoom_ratio = normdeg2px / deg2px
     # Zoom each image so that the pixels per degree is right:
@@ -232,9 +235,9 @@ def calc_images(pixels_per_degree, stimulus_map, stimulus_ordering,
         try: rad_px = pimms.mag(aperture_radius, 'px')
         except: raise ValuerError('aperture_radius given in unrecognized units')
     aew_px = 0
-    try: aeq_px = pimms.mag(aperture_edge_width, 'deg') * normdeg2px
+    try: aew_px = pimms.mag(aperture_edge_width, 'deg') * normdeg2px
     except:
-        try: aeq_px = pimms.mag(aperture_edge_width, 'px')
+        try: aew_px = pimms.mag(aperture_edge_width, 'px')
         except: raise ValuerError('aperture_edge_width given in unrecognized units')
     bg = background
     imgs = {k:image_apply_aperture(im, rad_px, fill_value=bg, edge_width=aew_px)

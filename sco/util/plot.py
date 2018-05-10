@@ -6,16 +6,12 @@
 import numpy             as np
 import neuropythy        as ny
 import pyrsistent        as pyr
-import matplotlib
-import matplotlib.pyplot as plt
-import matplotlib.tri    as tri
-import matplotlib.cm     as cm
 import pint, pimms, os
 
 def cortical_image(prediction, labels, pRFs, max_eccentricity, image_number=None,
                    visual_area=1, image_size=200, n_stds=1,
-                   size_gain=1, method='triangulation', subplot=None,
-                   smoothing=None, cmap=cm.afmhot, clipping=None, speckle=None):
+                   size_gain=1, method='triangulation', axes=None,
+                   smoothing=None, cmap='afmhot', clipping=None, speckle=None):
     '''
     cortical_image(pred, labels, pRFs, maxecc) yields an array of figures that reconstruct the
       cortical images for the given sco results datapool. The image is always sized such that the
@@ -49,22 +45,23 @@ def cortical_image(prediction, labels, pRFs, max_eccentricity, image_number=None
         randomly add before smoothing; these points essentially fill in space on the image if the
         vertices for a triangulation are sparse. This is only used if smoothing is also used.
     '''
+    import matplotlib
+    import matplotlib.pyplot as plt
+    import matplotlib.tri    as tri
+    import matplotlib.cm     as cm
     # if not given an image number, we want to iterate through all images:
     if image_number is None:
         return np.asarray([cortical_image(datapool, visual_area=visual_area, image_number=ii,
                                           image_size=image_size, n_stds=n_stds, method=method,
-                                          subplot=subplot)
+                                          axes=axes)
                            for ii in range(len(datapool['image_array']))])
-    if subplot is None:
-        plotter = plt
-        fig = plotter.figure()
-    else:
-        plotter = subplot
-        fig = subplot
+    if axes is None: axes = plt.gca()
     # Some parameter handling:
     maxecc  = float(pimms.mag(max_eccentricity, 'deg'))
-    centers = np.asarray([pimms.mag(p.center, 'deg') for p in pRFs])
-    sigs    = np.asarray([pimms.mag(p.radius, 'deg') for p in pRFs])
+    centers = np.asarray([pimms.mag(p.center, 'deg') if l == visual_area else (0,0)
+                          for (p,l) in zip(pRFs, labels)])
+    sigs    = np.asarray([pimms.mag(p.radius, 'deg') if l == visual_area else 0
+                          for (p,l) in zip(pRFs, labels)])
     z       = prediction[:,image_number]
     (x,y,z,sigs) = np.transpose([(xx,yy,zz,ss)
                                  for ((xx,yy),zz,ss,l) in zip(centers,z,sigs,labels)
@@ -72,6 +69,7 @@ def cortical_image(prediction, labels, pRFs, max_eccentricity, image_number=None
     clipfn = (lambda zz: (None,None))                if clipping is None            else \
              (lambda zz: np.percentile(z, clipping)) if isinstance(clipping, tuple) else \
              (lambda zz: clipping)
+    cmap = getattr(cm, cmap) if pimms.is_str(cmap) else cmap
     if method == 'triangulation':
         if smoothing is None: t = tri.Triangulation(x,y)
         else:
@@ -85,13 +83,13 @@ def cortical_image(prediction, labels, pRFs, max_eccentricity, image_number=None
                 t = tri.Triangulation(x,y)
             # make a cortical mesh
             coords = np.asarray([x,y])
-            msh = ny.cortex.CorticalMesh(coords, t.triangles.T)
+            msh = ny.Mesh(coords, t.triangles.T)
             z = ny.mesh_smooth(msh, z, smoothness=smoothing, )
         (mn,mx) = clipfn(z)
-        plotter.tripcolor(t, z, cmap=cmap, shading='gouraud', vmin=mn, vmax=mx)
-        plotter.axis('equal')
-        plotter.axis('off')
-        return fig
+        axes.tripcolor(t, z, cmap=cmap, shading='gouraud', vmin=mn, vmax=mx)
+        axes.axis('equal')
+        axes.axis('off')
+        return plt.gcf()
     elif method == 'pRF_projection':
         # otherwise, we operate on a single image:    
         img        = np.zeros((image_size, image_size, 2))
@@ -124,12 +122,14 @@ def cortical_image(prediction, labels, pRFs, max_eccentricity, image_number=None
     
 def corrcoef_image(pred, meas, labels, pRFs, max_eccentricity,
                    visual_area=1, image_size=200, n_stds=1,
-                   size_gain=1, method='triangulation', subplot=None):
+                   size_gain=1, method='triangulation', axes=None):
     '''
     corrcoef_image(imap) plots an image (using sco.util.cortical_image) of the correlation
       coefficients of the prediction versus the measurements in the given results map from
       the SCO model plan, imap.
     '''
+    import matplotlib.pyplot as plt
+
     r = np.zeros(meas.shape[0])
     for (i,(p,t)) in enumerate(zip(pred,meas)):
             try:    r[i] = np.corrcoef(p,t)[0,1]
@@ -138,9 +138,9 @@ def corrcoef_image(pred, meas, labels, pRFs, max_eccentricity,
     f = cortical_image(r, labels, pRFs, max_eccentricity, image_number=0,
                        visual_area=visual_area, image_size=image_size,
                        n_stds=n_stds, size_gain=size_gain, method=method,
-                       subplot=subplot)
-    subplot = plt if subplot is None else subplot
-    subplot.clim((-1,1))
+                       axes=axes)
+    axes = plt.gca() if axes is None else axes
+    axes.clim((-1,1))
     return f
 
 def report_image(anal):
@@ -148,6 +148,7 @@ def report_image(anal):
     report_image(panam) createa a report image from the prediction analysis panal and returns the
       created figure.
     '''
+    import matplotlib.pyplot as plt
     
     def analq(**kwargs): return anal[pyr.m(**kwargs)]
     

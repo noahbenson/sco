@@ -8,7 +8,7 @@ import pimms      as _pimms
 
 from .plot import (cortical_image, corrcoef_image, report_image)
 from .io   import (export_predictions, export_analysis, export_report_images, calc_exported_files,
-                   require_exports)
+                   export_vega, require_exports)
 # The unit registry that we use
 units = _pimms.units
 
@@ -47,6 +47,7 @@ def lookup_labels(labels, data_by_labels, **kwargs):
 export_plan_data = _pyr.m(export_predictions     = export_predictions,
                           export_analysis        = export_analysis,
                           export_report_images   = export_report_images,
+                          export_vega            = export_vega,
                           exported_files         = calc_exported_files)
 export_plan = _pimms.plan(export_plan_data)
 

@@ -96,3 +96,5 @@ stimuli.mat
 
 # svg images
 *.svg
+
+.DS_Store
