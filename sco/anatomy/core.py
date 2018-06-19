@@ -15,22 +15,24 @@ import pimms, os, sys, warnings
 from   ..util                import (lookup_labels, units, import_mri, apply_affine)
 
 @pimms.calc('freesurfer_subject', memoize=True)
-def import_freesurfer_subject(subject):
+def import_freesurfer_subject(subject=None):
     '''
     import_freesurfer_subject is a calculator that requires a subject id (subject) and yields a
     Neuropythy FreeSurfer subject object, freesurfer_subject.
 
       @ subject Must be one of (a) the name of a FreeSurfer subject found on the subject path,
-        (b) a path to a FreeSurfer subject directory, or (c) a neuropythy FreeSurfer subject
-        object.
+        (b) a path to a FreeSurfer subject directory, (c) a neuropythy FreeSurfer subject object, or
+        (d) None, indicating that the pRF data does not come from a subject.
     '''
+    if subject is None:
+        return None
     if isinstance(subject, basestring):
         subject = neuro.freesurfer_subject(subject)
     if not isinstance(subject, neuro.Subject):
         raise ValueError('Value given for subject is neither a string nor a neuropythy subject')
     return subject
 
-@pimms.calc('cortex_affine')
+@pimms.calc('freesurfer_cortex_affine')
 def import_freesurfer_affine(freesurfer_subject, modality='surface'):
     '''
     import_freesurfer_affine is a calculation that imports the affine transform associated with a
@@ -43,12 +45,15 @@ def import_freesurfer_affine(freesurfer_subject, modality='surface'):
       @ modality May be 'volume' or 'surface' to specify the anatomical modality.
 
     Exported efferent values:
-      @ cortex_affine Will be the affine transformation matrix associated with the given
+      @ freesurfer_cortex_affine Will be the affine transformation matrix associated with the given
         freesurfer subject's volume data if the modality is 'volume'; if the modality is 'surface'
         then the affine transformation matrix converts from surface vertex coordinates to the space
         defined by the subject's ribbon's affine (i.e., the volume space, which is distinct from
-        the voxel index space).
+        the voxel index space). Note that this is merged into cortex_affine during a later
+        calculation that determines the source of the retinotopic data.
     '''
+    if freesurfer_subject is None:
+        return None
     raff = None
     try:
         raff = freesurfer_subject.mgh_images['lh.ribbon'].affine
@@ -65,37 +70,163 @@ def import_freesurfer_affine(freesurfer_subject, modality='surface'):
     else:
         raise ValueError('Unknown modality: %s' % modality)
 
-@pimms.calc('polar_angles', 'eccentricities', 'labels', 'hemispheres',
-            'cortex_indices', 'cortex_coordinates')
-def import_benson14_from_freesurfer(freesurfer_subject, max_eccentricity,
-                                    modality='surface', import_filter=None):
+@pimms.calc('measured_polar_angles',  'measured_eccentricities', 'measured_labels',
+            'measured_hemispheres',   'measured_cortex_indices', 'measured_cortex_coordinates',
+            'measured_cortex_affine',
+            cache=True)
+def import_measured_retinotopy(max_eccentricity, polar_angle_filename=None,
+                               eccentricity_filename=None, label_filename=None,
+                               hemisphere_filename=None, modality='surface'):
     '''
-    import_benson14_from_freesurfer is a calculation that imports (or creates then imports) the
-    Benson et al. (2014) template of retinotopy for the subject, whose neuropythy.freesurfer
-    Subject object must be provided in the parameter freesurfer_subject. The optional parameter
-    modality (default: 'volume') may be either 'volume' or 'surface', and determines if the loaded
-    modality is volumetric or surface-based.
+    import_measured_retinotopy is a calculation that imports retinotopic map data from a set of
+    filenames. The filenames must be MGH (*.mgh, *.mgz) or NifTI (*.nii, *.nii.gz) files, or
+    optionally FreeSurfer morph-data files for surface modality, and must
+    correspond to the appropriate data file. Each filename may optionally be given as a tuple 
+    (lh_filename, rh_filename), in which case the hemisphere is deduced from the file; if a single
+    filename is given for each, then either the polar angle data must be negative for the left
+    visual field / RH and positive for the right visual field / LH, OR, the optional argument
+    hemisphere_filename must be given and must be positive in the left hemisphere and negative in
+    the right hemisphere, OR, the label_filename must give positive labels in the RH
+    and negative labels in the LH. If both positive and negative values appear in the polar angle 
+    data, then those values are always used unmolested, regardless of hemisphere file or label file.
+
+    Note that each volume may contain an array of any dimensions; the voxel addresses are traced as
+    the cortex_indices no matter whether the volume is a true 3D volume or, e.g., a 1 x 1 x n
+    surface volume. The predictions volume that results always has the same dimensionality as the
+    input volume, but the 4th dimension is the number of predictions.
+    
+    Required afferent parameters:
+      @ polar_angle_filename Must give the filename (or an (lh_filename, rh_filename) tuple) of the
+        polar angle volume for the model to use; this volume's values must be in units of degrees,
+        with 0 degrees of polar angle indicating the upper vertical meridian and +90 degrees of
+        polar angle indicating the right horizontal meridian. The polar angle must be positive for
+        the right visual field / LH, but may be positive for the left visual field / RH as well if
+        negative labels are provided in either the optional hemisphere_filename or in the
+        label_filename. The values appearing in the polar angle file always take precedence unless
+        no negative values are given here.
+      @ eccentricity_filename Must give the filename (or an (lh_filename, rh_filename) tuple) of the
+        eccentricity volume for the model to use. This volume's values must be in units of degrees.
+      @ label_filename Must give the filename (or an (lh_filename, rh_filename) tuple) of the label
+        volume for the model to use. Any value of 0 indicates that that voxel should be ignored in
+        all other volume files as well. If both positive and negative values appear in the label
+        volume, then the negative values are taken to indicate the right hemisphere and/or the left
+        visual fiels.
+ 
+    Optional afferent parameters:
+      @ max_eccentricity May specifies the maximum eccentricity value to use (voxels with
+        eccentricity values above this are ignored).
+      @ hemisphere_filename Map specify the filename of a volume containing positive numbers for
+        the LH and negative numbers for the RH. If given, supercededs negative values found in the
+        labels file, but not the polar angles file.
+
+    Provided efferent values:
+      @ measured_polar_angles       Polar angle values for each vertex/voxel.
+      @ measured_eccentricities     Eccentricity values for each vertex/voxel.
+      @ measured_labels             An integer label 1, 2, or 3 for V1, V2, or V3, one per
+                                    vertex/voxel.
+      @ measured_hemispheres        1 if left, -1 if right for all vertex/voxel.
+      @ measured_cortex_indices     For vertices, the vertex index (in the appropriate hemisphere)
+                                    for each; for voxels, the (i,j,k) voxel index for each.
+      @ measured_cortex_coordinates For voxels, this is the (i,j,k) voxel index (same as
+                                    cortex_indices); for surfaces, this is ths (x,y,z) position of
+                                    each vertex in surface-space.
+      @ measured_cortex_affine      The transformation matrix associated with the volume, if any
+                                    modality is 'volume', otherwise None.
+
+    Notes:
+      * polar_angles are always given such that a negative polar angle indicates a RH value and a
+        positive polar angle inidicates a LH value
+      * labels will always be 1, 2, or 3 indicating V1, V2, or V3
+
+    '''
+    # The hemisphere might be specified in a few ways; we look for them by priority.
+    # (1) If the filenames are given as (lh, rh):
+    flnms = [polar_angle_filename, eccentricity_filename, label_filename]
+    if any(f is None for f in flnms):
+        if not all(f is None for f in flnms):
+            warnings.warn('Some but not all measurement filenames given')
+        return {'measured_polar_angles':   None,  'measured_eccentricities':     None,
+                'measured_labels':         None,  'measured_hemispheres':        None,
+                'measured_cortex_indices': None,  'measured_cortex_coordinates': None,
+                'measured_cortex_affine':  None}
+    elif all(isinstance(f, tuple) for f in flnms):
+        if hemisphere_filename is not None:
+            warnings.warn('ignoring hemisphere_filename input because (lh, rh) filenames given')
+        if modality != 'surface':
+            raise ValueError('Given modality is not surface, but paired retinotopy filenames given')
+        (angs, eccs, lbls) = [(import_mri(l), import_mri(r)) for (l,r) in flnms]
+        vshape = angs.shape
+        hemis = [np.full(l.shape, v) for (l,v) in zip(lbls, [1, -1])]
+        lbls = [np.round(np.abs(l)) for l in lbls]
+        (lids, rids) = [np.where((l > 0) & (l < 4)) for l in lbls]
+        # extract/concatenate values...
+        (angs, eccs, lbls, hemis) = [np.concatenate((l[lids], r[rids]))
+                                     for (l,r) in [angs, eccs, lbls, hemis]]
+        aids = np.concatenate((np.transpose(lids), np.transpose(rids)))
+        crds = None
+        tx = None
+    elif any(isinstance(f, tuple) for f in flnms):
+        raise ValueError('Either all or no filenames must be given as (lh_filename, rh_filename)')
+    else:
+        if modality != 'volume':
+            raise ValueError('Given modality is not volume, but single retinotopy filenames given')
+        (angs, eccs, lbls) = [import_mri(f) for f in flnms]
+        vshape = angs.shape
+        # get the anatomical id's:
+        lbl_sgns = np.sign(lbls)
+        lbls = np.round(np.abs(lbls))
+        aids = np.where((lbls > 0) & (lbls < 4))
+        # extract the data
+        (angs, eccs, lbls) = [x[aids] for x in [angs, eccs, lbls]]
+        # hemispheres: check first if there are negative values in polar angle data, then check if
+        # there are negative labels or if a hemispheres file is given
+        if -1 in np.unique(np.sign(angs)):
+            hemis = np.sign(angs)
+        elif -1 in np.unique(lbl_sgns):
+            hemis = lbl_sgns[aids]
+        elif hemisphere_filename is not None:
+            hemis = import_mri(hemisphere_filename)[aids]
+        else:
+            # this just means there is only one hemisphere given
+            hemis = np.ones(angs.shape, dtype=np.int)
+        tx = import_mri(label_filename, 'affine')
+        aids = np.asarray(aids, dtype=np.int).T
+        crds = np.asarray(aids, dtype=np.float)
+    return {'measured_polar_angles':   angs,  'measured_eccentricities':     eccs,
+            'measured_labels':         lbls,  'measured_hemispheres':        hemis,
+            'measured_cortex_indices': aids,  'measured_cortex_coordinates': crds,
+            'measured_cortex_affine':  tx}
+
+@pimms.calc('benson14_polar_angles', 'benson14_eccentricities', 'benson14_labels',
+            'benson14_hemispheres',  'benson14_cortex_indices', 'benson14_cortex_coordinates')
+def import_benson14_retinotopy(freesurfer_subject, max_eccentricity, measured_labels=None,
+                               modality='surface'):
+    '''
+    import_benson14_retinotopy is a calculation that imports (or creates then imports) the Benson et
+    al. (2014) template of retinotopy for the subject, whose neuropythy.freesurfer Subject object
+    must be provided in the parameter freesurfer_subject. The optional parameter modality (default:
+    'surface') may be either 'volume' or 'surface', and determines if the loaded modality is
+    volumetric or surface-based.
 
     Required afferent parameters:
       @ freesurfer_subject Must be a valid neuropythy.freesurfer.Subject object.
  
     Optional afferent parameters:
+      * measured_labels is used to determine if measurement data was included.
       @ modality May be 'volume' or 'surface' to specify the anatomical modality.
       @ max_eccentricity May specifies the maximum eccentricity value to use.
-      @ import_filter If specified, may give a function that accepts four parameters:
-        f(polar_angle, eccentricity, label, hemi); if this function fails to return True for the 
-        appropriate values of a particular vertex/voxel, then that vertex/voxel is not included in
-        the prediction.
 
     Provided efferent values:
-      @ polar_angles    Polar angle values for each vertex/voxel.
-      @ eccentricities  Eccentricity values for each vertex/voxel.
-      @ labels          An integer label 1, 2, or 3 for V1, V2, or V3, one per vertex/voxel.
-      @ hemispheres     1 if left, -1 if right for all vertex/voxel.
-      @ cortex_indices  For vertices, the vertex index (in the appropriate hemisphere) for each;
-                        for voxels, the (i,j,k) voxel index for each.
-      @ cortex_coordinates For voxels, this is the (i,j,k) voxel index (same as cortex_indices); for
-                        surfaces, this is ths (x,y,z) position of each vertex in surface-space.
+      @ benson14_polar_angles       Polar angle values for each vertex/voxel.
+      @ benson14_eccentricities     Eccentricity values for each vertex/voxel.
+      @ benson14_labels             An integer label 1, 2, or 3 for V1, V2, or V3, one per
+                                    vertex/voxel.
+      @ benson14_hemispheres        1 if left, -1 if right for all vertex/voxel.
+      @ benson14_cortex_indices     For vertices, the vertex index (in the appropriate hemisphere)
+                                    for each; for voxels, the (i,j,k) voxel index for each.
+      @ benson14_cortex_coordinates For voxels, this is the (i,j,k) voxel index (same as
+                                    benson14_cortex_indices); for surfaces, this is ths (x,y,z) 
+                                    position of each vertex in surface-space.
 
     Notes:
       * polar_angles are always given such that a negative polar angle indicates a RH value and a
@@ -104,6 +235,9 @@ def import_benson14_from_freesurfer(freesurfer_subject, max_eccentricity,
       * labels will always be 1, 2, or 3 indicating V1, V2, or V3
 
     '''
+    if freesurfer_subject is None or measured_labels is not None:
+        # we aren't loading benson14 data
+        return (None, None, None, None, None, None)
     max_eccentricity = max_eccentricity.to(units.deg) if pimms.is_quantity(max_eccentricity) else \
                        max_eccentricity*units.deg
     subject = freesurfer_subject
@@ -186,147 +320,72 @@ def import_benson14_from_freesurfer(freesurfer_subject, max_eccentricity,
     else:
         raise ValueError('Option modality must be \'surface\' or \'volume\'')
     # do the filtering and convert to pvectors
-    if import_filter is None:
-        res = {'polar_angles':       units.degree * angles,
-               'eccentricities':     units.degree * eccens,
-               'labels':             labels,
-               'cortex_indices':     idcs,
-               'cortex_coordinates': coords,
-               'hemispheres':        hemis}
-    else:
-        sels = [i for (i,(p,e,l,h)) in enumerate(zip(angles, eccens, labels, hemis))
-                if import_filter(p,e,l,h)]
-        res = {'polar_angles':       units.degree * angles[sels],
-               'eccentricities':     units.degree * eccens[sels],
-               'labels':             labels[sels],
-               'cortex_indices':     idcs[sels],
-               'cortex_coordinates': coords[sels],
-               'hemispheres':        hemis[sels]}
+    res = {'benson14_polar_angles':       pimms.quant(angles, 'deg'),
+           'benson14_eccentricities':     pimms.quant(eccens, 'deg'),
+           'benson14_labels':             labels,
+           'benson14_cortex_indices':     idcs,
+           'benson14_cortex_coordinates': coords,
+           'benson14_hemispheres':        hemis}
     # make sure they're all write-only
     for v in res.itervalues():
         v.setflags(write=False)
     return res
 
 @pimms.calc('polar_angles', 'eccentricities', 'labels', 'hemispheres',
-            'modality', 'cortex_indices', 'cortex_coordinates', 'cortex_affine',
-            cache=True)
-def import_retinotopy_data_files(polar_angle_filename, eccentricity_filename, label_filename,
-                                 hemisphere_filename=None, import_filter=None,
-                                 max_eccentricity=None):
+            'cortex_indices', 'cortex_coordinates', 'cortex_affine')
+def calc_retinotopy(benson14_polar_angles, benson14_eccentricities, benson14_labels,
+                    benson14_hemispheres,  benson14_cortex_indices, benson14_cortex_coordinates,
+                    measured_polar_angles, measured_eccentricities, measured_labels,
+                    measured_hemispheres,  measured_cortex_indices, measured_cortex_coordinates,
+                    freesurfer_cortex_affine, measured_cortex_affine,
+                    modality, import_filter=None):
     '''
+    calc_retinotopy is a calculator that unifies the various modes of importing retinotopic data and
+    yields a set of general values (polar angle, eccentricity, labels, etc) that are used downstream
+    by the SCO model.
 
-    import_retinotopy_data_files is a calculation that imports retinotopic map data from a set of
-    filenames. The filenames must be MGH (*.mgh, *.mgz) or NifTI (*.nii, *.nii.gz) files, or
-    optionally FreeSurfer morph-data files for surface modality, and must
-    correspond to the appropriate data file. Each filename may optionally be given as a tuple 
-    (lh_filename, rh_filename), in which case the hemisphere is deduced from the file; if a single
-    filename is given for each, then either the polar angle data must be negative for the left
-    visual field / RH and positive for the right visual field / LH, OR, the optional argument
-    hemisphere_filename must be given and must be positive in the left hemisphere and negative in
-    the right hemisphere, OR, the label_filename must give positive labels in the RH
-    and negative labels in the LH. If both positive and negative values appear in the polar angle 
-    data, then those values are always used unmolested, regardless of hemisphere file or label file.
-
-    Note that each volume may contain an array of any dimensions; the voxel addresses are traced as
-    the cortex_indices no matter whether the volume is a true 3D volume or, e.g., a 1 x 1 x n
-    surface volume. The predictions volume that results always has the same dimensionality as the
-    input volume, but the 4th dimension is the number of predictions.
-    
-    Required afferent parameters:
-      @ polar_angle_filename Must give the filename (or an (lh_filename, rh_filename) tuple) of the
-        polar angle volume for the model to use; this volume's values must be in units of degrees,
-        with 0 degrees of polar angle indicating the upper vertical meridian and +90 degrees of
-        polar angle indicating the right horizontal meridian. The polar angle must be positive for
-        the right visual field / LH, but may be positive for the left visual field / RH as well if
-        negative labels are provided in either the optional hemisphere_filename or in the
-        label_filename. The values appearing in the polar angle file always take precedence unless
-        no negative values are given here.
-      @ eccentricity_filename Must give the filename (or an (lh_filename, rh_filename) tuple) of the
-        eccentricity volume for the model to use. This volume's values must be in units of degrees.
-      @ label_filename Must give the filename (or an (lh_filename, rh_filename) tuple) of the label
-        volume for the model to use. Any value of 0 indicates that that voxel should be ignored in
-        all other volume files as well. If both positive and negative values appear in the label
-        volume, then the negative values are taken to indicate the right hemisphere and/or the left
-        visual fiels.
- 
-    Optional afferent parameters:
-      @ max_eccentricity May specifies the maximum eccentricity value to use (voxels with
-        eccentricity values above this are ignored).
-      @ hemisphere_filename Map specify the filename of a volume containing positive numbers for
-        the LH and negative numbers for the RH. If given, supercededs negative values found in the
-        labels file, but not the polar angles file.
+    Afferent values:
       @ import_filter If specified, may give a function that accepts four parameters:
         f(polar_angle, eccentricity, label, hemi); if this function fails to return True for the 
         appropriate values of a particular vertex/voxel, then that vertex/voxel is not included in
         the prediction.
-
-    Provided efferent values:
-      @ polar_angles       Polar angle values for each vertex/voxel.
-      @ eccentricities     Eccentricity values for each vertex/voxel.
-      @ labels             An integer label 1, 2, or 3 for V1, V2, or V3, one per vertex/voxel.
-      @ hemispheres        1 if left, -1 if right for all vertex/voxel.
-      @ cortex_indices     For vertices, the vertex index (in the appropriate hemisphere) for each;
-                           for voxels, the (i,j,k) voxel index for each.
-      @ cortex_coordinates For voxels, this is the (i,j,k) voxel index (same as cortex_indices); for
-                           surfaces, this is ths (x,y,z) position of each vertex in surface-space.
-      @ modality           If the given filenames referred to volume files, then 'volume', otherwise,
-                           'surface'.
-      @ cortex_affine      The transformation matrix associated with the volume, if any modality
-                           is 'volume', otherwise None.
-
-    Notes:
-      * polar_angles are always given such that a negative polar angle indicates a RH value and a
-        positive polar angle inidicates a LH value
-      * labels will always be 1, 2, or 3 indicating V1, V2, or V3
-
     '''
-    # The hemisphere might be specified in a few ways; we look for them by priority.
-    # (1) If the filenames are given as (lh, rh):
-    flnms = [polar_angle_filename, eccentricity_filename, label_filename]
-    if all(isinstance(f, tuple) for f in flnms):
-        if hemisphere_filename is not None:
-            warnings.warn('ignoring hemisphere_filename input because (lh, rh) filenames given')
-        (angs, eccs, lbls) = [(import_mri(l), import_mri(r)) for (l,r) in flnms]
-        vshape = angs.shape
-        hemis = [np.full(l.shape, v) for (l,v) in zip(lbls, [1, -1])]
-        lbls = [np.round(np.abs(l)) for l in lbls]
-        (lids, rids) = [np.where((l > 0) & (l < 4)) for l in lbls]
-        # extract/concatenate values...
-        (angs, eccs, lbls, hemis) = [np.concatenate((l[lids], r[rids]))
-                                     for (l,r) in [angs, eccs, lbls, hemis]]
-        aids = np.concatenate((np.transpose(lids), np.transpose(rids)))
-        crds = None
-        tx = None
-    elif any(isinstance(f, tuple) for f in flnms):
-        raise ValueError('Either all or no filenames must be given as (lh_filename, rh_filename)')
-    else:
-        (angs, eccs, lbls) = [import_mri(f) for f in flnms]
-        vshape = angs.shape
-        # get the anatomical id's:
-        lbl_sgns = np.sign(lbls)
-        lbls = np.round(np.abs(lbls))
-        aids = np.where((lbls > 0) & (lbls < 4))
-        # extract the data
-        (angs, eccs, lbls) = [x[aids] for x in [angs, eccs, lbls]]
-        # hemispheres: check first if there are negative values in polar angle data, then check if
-        # there are negative labels or if a hemispheres file is given
-        if -1 in np.unique(np.sign(angs)):
-            hemis = np.sign(angs)
-        elif -1 in np.unique(lbl_sgns):
-            hemis = lbl_sgns[aids]
-        elif hemisphere_filename is not None:
-            hemis = import_mri(hemisphere_filename)[aids]
-        else:
-            # this just means there is only one hemisphere given
-            hemis = np.ones(angs.shape, dtype=np.int)
-        tx = import_mri(label_filename, 'affine')
-        aids = np.asarray(aids, dtype=np.int).T
-        crds = np.asarray(aids, dtype=np.float)
-    # Okay, we should be set; the modality we can get from the vshape
-    modality = 'surface' if len(vshape) == 1 else 'volume'
-    return {'polar_angles':  angs,  'eccentricities': eccs,     'labels':             lbls,
-            'hemispheres':   hemis, 'cortex_indices': aids,     'cortex_coordinates': crds,
-            'cortex_affine': tx,    'modality':       modality}
+    b14 = (benson14_polar_angles,
+           benson14_eccentricities,
+           benson14_labels,
+           benson14_hemispheres,
+           benson14_cortex_indices,
+           benson14_cortex_coordinates,
+           freesurfer_cortex_affine)
+    msd = (measured_polar_angles,
+           measured_eccentricities,
+           measured_labels,
+           measured_hemispheres,
+           measured_cortex_indices,
+           measured_cortex_coordinates,
+           measured_cortex_affine)
+    if   all(x is not None for x in msd): dat = msd
+    elif all(x is not None for x in b14): dat = b14
+    else: raise ValueError('Neither benson14 nor measured retinotopy import succeeded')
+    (angles, eccens, labels, hemis, idcs, coords, tx) = dat
+    if tx is None and freesurfer_cortex_affine is not None:
+        tx = freesurfer_cortex_affine
+    angles = pimms.mag(angles, 'deg')
+    eccens = pimms.mag(eccens, 'deg')
+    if import_filter is not None:
+        sels = [i for (i,(p,e,l,h)) in enumerate(zip(angles, eccens, labels, hemis))
+                if import_filter(p,e,l,h)]
+        (angles, eccens, labels, hemis, idcs, coords) = [
+            x[sels]
+            for x in (angles, eccens, labels, hemis, idcs, coords)]
+    res = {'polar_angles':       pimms.quant(angles, 'deg'),
+           'eccentricities':     pimms.quant(eccens, 'deg'),
+           'labels':             labels,
+           'cortex_indices':     idcs,
+           'cortex_coordinates': coords,
+           'hemispheres':        hemis,
+           'cortex_affine':      tx}
+    return res
 
 @pimms.calc('coordinates', memoize=True)
 def calc_prediction_coordinates(cortex_coordinates, cortex_affine):

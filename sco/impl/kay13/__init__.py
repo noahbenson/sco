@@ -30,7 +30,7 @@ from sco.impl.benson17 import (pRF_sigma_slopes_by_label_Kay2013,
                                saturation_constants_by_label_Kay2013,
                                divisive_exponents_by_label_Kay2013)
 
-def spatial_frequency_sensitivity(e, s, l):
+def spatial_frequency_sensitivity(prf, cpds):
     '''
     sco.impl.kay13.spatial_frequency_sensitivity(prf, cpds) always yields a narrow band of
       sensitivity to spatial frequencies near 3 cycles/degree.
@@ -53,6 +53,7 @@ def provide_default_options(
         divisive_exponents_by_label            = divisive_exponents_by_label_Kay2013,
         max_eccentricity                       = 7.5,
         modality                               = 'surface',
+        gabor_spatial_frequencies              = (_pimms.quant(3.0, 'cycles/deg'),),
         spatial_frequency_sensitivity_function = spatial_frequency_sensitivity):
     '''
     provide_default_options is a calculator that optionally accepts values for all parameters for
@@ -74,14 +75,15 @@ def provide_default_options(
     return True
 
 # The volume (default) calculation chain
-sco_plan_data = _pyr.pmap({k:v
-                           for pd    in [sco.stimulus.stimulus_plan_data,
-                                         sco.contrast.contrast_plan_data,
-                                         sco.pRF.pRF_plan_data,
-                                         sco.anatomy.anatomy_plan_data,
-                                         sco.analysis.analysis_plan_data,
-                                         sco.util.export_plan_data,
-                                         {'default_options': provide_default_options}]
-                           for (k,v) in pd.iteritems()})
+sco_plan_data = _pyr.pmap(
+    {k:v
+     for pd    in [sco.stimulus.stimulus_plan_data,
+                   sco.contrast.contrast_plan_data.discard('gabor_spatial_frequencies'),
+                   sco.pRF.pRF_plan_data,
+                   sco.anatomy.anatomy_plan_data,
+                   sco.analysis.analysis_plan_data,
+                   sco.util.export_plan_data,
+                   {'default_options': provide_default_options}]
+     for (k,v) in pd.iteritems()})
 
 sco_plan      = _pimms.plan(sco_plan_data)
