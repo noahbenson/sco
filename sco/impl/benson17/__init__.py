@@ -24,121 +24,6 @@ import sco.analysis
 import sco.util
 
 
-# Divisive Normalization ###########################################################################
-# The following are divisive normalization models that can be used with the SCO
-def divisively_normalize_Heeger1992(data, divisive_exponent=0.5, saturation_constant=1.0):
-    '''
-    divisively_normalize(data) yields the 3D image array that is the result of divisively
-    normalizing the 3D orientation-filtered image array values of the map data, whose keys should
-    be the orientations (in radians) of the gabor filters applied to the values.
-
-    Reference:
-      Heeger DJ (1992) Vis. Neurosci. 9(2):181-197. doi:10.1017/S0952523800009640.
-    '''
-    surround = _np.mean(data.values(), axis=0)
-    s = saturation_constant
-    r = divisive_exponent
-    den = (s**r + surround**r)
-    num = _np.zeros(surround.shape)
-    for v in data.itervalues(): num += v**r
-    num /= len(data)
-    normalized = num / den
-    normalized.setflags(write=False)
-    return normalized
-
-def divisively_normalize_Heeger1992_square(data, divisive_exponent=1, saturation_constant=1.0):
-    '''
-    Same as "divisively_normalize_Heeger1992", but squares data before divisive normalization and
-    sums across orientations for the surround term.
-    '''
-    data = {key: pow(value,2) for key, value in data.items()}
-    surround = _np.sum(data.values(), axis=0)
-    s = saturation_constant
-    r = divisive_exponent
-    den = (s**r + surround**r)
-    num = _np.zeros(surround.shape)
-    for v in data.itervalues(): num += v**r
-    num /= len(data)
-    normalized = num / den
-    normalized.setflags(write=False)
-    return normalized
-
-def divisively_normalize_naive(data, divisive_exponent=0.5, saturation_constant=1.0):
-    '''
-    divisively_normalize_naive(data) yields the 3D image array that is the result of divisively
-    normalizing the 3D orientation-filtered image array values of the map data, whose keys should
-    be the orientations (in radians) of the gabor filters applied to the values. The naive
-    divisive normalization step does nothing, just averages and returns.
-    '''
-    return _np.mean(data.values(), axis=0)
-
-def divisively_normalize_spatialfreq(data, divisive_exponent=2, saturation_constant=0.1):
-    '''
-    Divisively normalizes data taking into account the previous and following spatial frequency level. 
-    Data is the 4D decomposition of an image into spatial frequencies and orientations, such as the result 
-    of the steerable pyramid transform.
-
-    Author: Chrysa Papadaniil <chrysa@nyu.edu>
-    '''
-    numlevels = data.shape[0]
-    s = saturation_constant
-    r = divisive_exponent
-    normalizers = np.sum(data, axis=1)
-    normalized = np.full(data.shape, 0.0)
-    normalized[0] = data[0]**r / ((normalizers[0]+normalizers[1])**r + s**r)
-    normalized[numlevels-1] = data[numlevels-1]**r/((normalizers[numlevels-1]+normalizers[numlevels-2])**r+s**r)
-    inter_levels=range(1,numlevels-1)
-    for level in (inter_levels):
-        normalizer = normalizers[level] + normalizers[level+1] + normalizers[level-1]
-        normalized[level] = (data[level])**r/(normalizer**r+s**r)
-    normalized.setflags(write=False)
-    return normalized
-
-@_pimms.calc('divisive_normalization_parameters', 'divisive_normalization_function', cache=True)
-def calc_divisive_normalization(labels, saturation_constants_by_label, divisive_exponents_by_label,
-                                divisive_normalization_schema='Heeger1992'):
-    '''
-    calc_divisive_normalization is a calculator that prepares the divisive normalization function
-    to be run in the sco pipeline. It gathers parameters into a pimms itable (such that each row
-    is a map of the parameters for each pRF in the pRFs list), which is returned as the value
-    'divisive_normalization_parameters'; it also adds a 'divisive_normalization_function' that
-    is appropriate for the parameters given. In the case of this implementation, the parameters
-    saturation_constant and divisive_exponent are extracted from the afferent parameters
-    saturation_constant_by_label and divisive_exponent_by_label, and the function
-    sco.impl.benson17.divisively_normalize_Heeger1992 is used.
-
-    Required afferent parameters:
-      * labels
-      @ saturation_constants_by_label Must be a map whose keys are label values and whose values are
-        the saturation constant for the particular area; all values appearing in the pRF labels
-        must be found in this map.
-      * divisive_exponents_by_label Must be a map whose keys are label values and whose values are
-        the divisive normalization exponent for that particular area; all values appearing in the
-        pRF labels must be found in this map.
-
-    Optional afferent parameters:
-     @ divisive_normalization_schema specifies the kind of divisive normalization to perform;
-       currently this must be either 'Heeger1992' or 'naive'; the former is the default.
-
-    Provided efferent values:
-      @ divisive_normalization_parameters Will be an ITable whose columns correspond to the
-        divisive normalization formula's saturation constant and exponent; the rows will correspond
-        to the pRFs.
-      @ divisive_normalization_function Will be a function compatible with the
-        divisive_normalization_parameters data-table; currently this is
-        sco.impl.benson17.divisively_normalize_Heeger1992.
-    '''
-    sat = sco.util.lookup_labels(labels, saturation_constants_by_label)
-    rxp = sco.util.lookup_labels(labels, divisive_exponents_by_label)
-    tr = {'heeger1992':        '.divisively_normalize_Heeger1992',
-          'naive':             '.divisively_normalize_naive',
-          'sfreq':             '.divisively_normalize_spatialfreq',
-          'square':            '.divisively_normalize_Heeger1992_square',
-          'heeger1992_square': '.divisively_normalize_Heeger1992_square'}
-    dns = divisive_normalization_schema.lower()
-    return (_pimms.itable(saturation_constant=sat, divisive_exponent=rxp),
-            (__name__ + tr[dns]) if dns in tr else dns)
-
 # Parameters Defined by Labels #####################################################################
 visual_area_names_by_label = _pyr.pmap({1:'V1', 2:'V2', 3:'V3', 4:'hV4'})
 visual_area_labels_by_name = _pyr.pmap({v:k for (k,v) in visual_area_names_by_label.iteritems()})
@@ -172,56 +57,28 @@ ones_by_label  = _pyr.pmap({1:1.0, 2:1.0, 3:1.0, 4:1.0})
 zeros_by_label = _pyr.pmap({1:0.0, 2:0.0, 3:0.0, 4:1.0})
 
 # Frequency Sensitivity ############################################################################
-#_sensitivity_frequencies_cpd = _pimms.quant(_np.asarray([0.75 * 2.0**(0.5 * k) for k in range(6)]),
-#                                            'cycles/deg')
-#_sensitivity_frequencies_cpd = _pimms.quant(_np.asarray([5, 3.5355, 2.5000, 1.7678, 1.2500, 0.8839,
-#                                                         0.6250, 0.4419, 0.3125]),
-#                                            'cycles/deg')
-#_sensitivity_frequencies_cpd = _pimms.quant(_np.asarray([0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 6.0]),
-#                                            'cycles/deg')
-#_sensitivity_frequencies_cpd = _pimms.quant(
-#    _np.asarray(_np.exp(_np.log(18.0)/6.0 * _np.asarray(range(1,8)) - _np.log(3.0))),
-#    'cycles/deg')
-_sensitivity_frequencies_cpd = _pimms.quant(
-    _np.asarray(_np.exp(0.5 * _np.asarray(range(1,8)) - 1.5)),
-    'cycles/deg')
-
-_cpd_sensitivity_cache = {}
-def cpd_sensitivity(e, s, l):
+def spatial_frequency_sensitivity(prf, cpds):
     '''
-    cpd_sensitivity(ecc, prfsz, lbl) yields the predicted spatial frequency sensitivity of a 
-    pRF whose center has the given eccentricity ecc, pRF radius prfsz, and V1/V2/V3 label lbl.
-    This is returned as a map whose keys are sampled frequencies (in cycles per degree) and
-    whose values sum to 1.
+    spatial_frequency_sensitivity(prf, cpds) yields a list of weights for the spatial frequencies
+      found in the argument cpds (in cycles/degree) for the given prf.
+    
+    The formula used for this calculation is as follows:
+      * r  = pRF eccentricity
+      * p0 = preferred spatial period (1/f)
+      Then, p0 = 0.13594144711190237 * r + 0.33057571189207119;
+      The FWHM in log2 spacing of the Gaussian centered at p0 is ~4.35 (std of ~1.85).
+    This formula came from the following work:
+      * Broderick WF, Benson NC, Simoncelli E, Winawer J (2018) Mapping spatial frequency
+        preferences in the human visual cortex. Vision Sciences Society annual meeting, 2018,
+        poster presentation.
     '''
-    e = _pimms.mag(e, 'deg')
-    if e in _cpd_sensitivity_cache: return _cpd_sensitivity_cache[e]
-
-    if e < 0.1: e = 0.1
-
-    # For normal distribution
-    #mu  = 0.827 + 1.689/e
-    #std = 0.444 + 0.734/e
-    #weights = {k.m: _np.exp(-0.5*((k.m - mu)/std)**2)
-    #           for k in _sensitivity_frequencies_cpd}
-
-    # For log-normal distribution
-    mu  = 1.435 + _np.power(e, 0.511)
-    std = 0.186 + _np.power(e, 0.333)
-    weights = {k.m: _np.exp(-0.5*((_np.log(k.m) - mu)/std)**2)/k.m
-               for k in _sensitivity_frequencies_cpd}
-
-    wtot = _np.sum(weights.values())
-    weights = {k:v/wtot for (k,v) in weights.iteritems()}
-    res = {k:v for (k,v) in weights.iteritems() if v > 0.01}
-    if len(res) == 0:
-        res = weights
-    elif len(res) < len(weights):
-        wtot = _np.sum(res.values())
-        res = {k:(v/wtot) for (k,v) in res.iteritems()}
-    res = _pyr.pmap(res)
-    _cpd_sensitivity_cache[e] = res
-    return res
+    r  = _np.sqrt(prf.center[0]**2 + prf.center[1]**2)
+    p0 = 0.13594144711190237 * r + 0.33057571189207119
+    lf0 = _np.log2(1/p0)
+    # weights are log-gaussian distributed around the preferred period
+    cpds = _np.log2(_pimms.mag(cpds, 'cycles/degree'))
+    ws = _np.exp(-0.5 * ((cpds - lf0)/1.85)**2)
+    return ws / _np.sum(ws)
 
 # Default Options ##################################################################################
 # The default options are provided here for the SCO
@@ -232,12 +89,10 @@ def provide_default_options(
         contrast_constants_by_label    = 'sco.impl.benson17.contrast_constants_by_label_Kay2013',
         compressive_constants_by_label = 'sco.impl.benson17.compressive_constants_by_label_Kay2013',
         saturation_constants_by_label  = 'sco.impl.benson17.saturation_constants_by_label_Kay2013',
-        divisive_exponents_by_label    = 'sco.impl.benson17.divisive_exponents_by_label_Kay2013',
         gains_by_label                 = 'sco.impl.benson17.gains_by_label_Benson2017',
         max_eccentricity               = 12,
         modality                       = 'surface',
-        cpd_sensitivity_function       = 'sco.impl.benson17.cpd_sensitivity',
-        gabor_orientations             = 8):
+        spatial_frequency_sensitivity_function = 'sco.impl.benson17.spatial_frequency_sensitivity'):
     '''
     provide_default_options is a calculator that optionally accepts values for all parameters for
     which default values are provided in the sco.impl.benson17 package and yields into the calc plan
@@ -252,8 +107,8 @@ def provide_default_options(
       * max_eccentricity (12)
       * cpd_sensitivity_function (sco.impl.benson17.cpd_sensitivity)
       * saturation_constant_by_label (sco.impl.benson17.saturation_constants_by_label_Kay2013)
-      * divisive_exponent_by_label (sco.impl.benson17.divisive_exponents_by_label_Kay2013)
       * gains_by_label (sco.impl.benson17.divisive_exponent_Kay2013)
+      * spatial_frequency_sensitivity_function (sco.impl.benson17.spatial_frequency_sensitivity)
       * gabor_orientations (8)
     '''
     # the defaults are filled-in by virtue of being in the above argument list
@@ -267,8 +122,7 @@ sco_plan_data = _pyr.pmap({k:v
                                          sco.anatomy.anatomy_plan_data,
                                          sco.analysis.analysis_plan_data,
                                          sco.util.export_plan_data,
-                                         {'default_options': provide_default_options,
-                                          'divisive_normalization': calc_divisive_normalization}]
+                                         {'default_options': provide_default_options}]
                            for (k,v) in pd.iteritems()})
 
 sco_plan      = _pimms.plan(sco_plan_data)

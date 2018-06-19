@@ -4,6 +4,8 @@
 # By Noah C. Benson
 
 import numpy                 as     np
+import numpy.matlib          as     npmat
+import neuropythy            as     ny
 import scipy.sparse          as     sparse
 import pyrsistent            as     pyr
 from   sco.util              import (units, lookup_labels, global_lookup)
@@ -16,10 +18,11 @@ class PRFSpec(object):
     from an image. Generally the class is used by a combination of the matrix() method and the
     __call__ method.
     '''
-    def __init__(self, center, sigma, expt, n_radii=3):
+    def __init__(self, center, sigma, expt, label, n_radii=3):
         self.center = center
         self.sigma = sigma
         self.exponent = expt
+        self.label = label
         self.n_radii = n_radii
     def __getstate__(self):
         d = self.__dict__.copy()
@@ -55,14 +58,10 @@ class PRFSpec(object):
         '''
         prf.sigma is the pRF sigma parameter in degrees; see also radius.
         '''
-        if pimms.is_quantity(sig):
-            if sig.u == units.rad:   sig = sig.to(units.deg)
-            elif not (sig.u == units.deg):
-                raise ValueError('pRF sigma must be in degrees or radians')
-        else:
-            sig = sig * units.deg
+        sig = pimms.mag(sig, 'deg')
         if sig <= 0: raise ValueError('sigma must be positive')
-        return sig
+        if sig < 0.05: sig = 0.05
+        return pimms.quant(sig, 'deg')
     @pimms.param
     def exponent(e):
         '''
@@ -70,6 +69,17 @@ class PRFSpec(object):
         '''
         if e <= 0: raise ValueError('exponent must be postive')
         return e
+    @pimms.param
+    def label(l):
+        '''
+        prf.label is the visual area label of the pRF.
+        '''
+        if pimms.is_str(l):
+            return l.lower()
+        elif not pimms.is_int(l) or l < 0:
+            raise ValueError('Labels must be positive integers or strings')
+        else:
+            return l
     @pimms.value
     def radius(sigma, exponent):
         '''
@@ -97,36 +107,33 @@ class PRFSpec(object):
 
     def _params(self, imshape, d2p):
         if len(imshape) > 2: imshape = imshape[-2:]
-        if not pimms.is_quantity(d2p): d2p = d2p * (units.px/units.deg)
-        imshape = imshape * units.px
-        x0 = np.asarray([(imshape[0]*0.5 - self.center[1]*d2p).to(units.px).m,
-                         (imshape[1]*0.5 + self.center[0]*d2p).to(units.px).m])
-        rad = self.radius * d2p
-        dst = (self.n_radii * rad).m
+        d2p = pimms.mag(d2p, 'px/deg')
+        imshape = pimms.mag(imshape, 'px')
+        ctr = pimms.mag(self.center, 'deg')
+        x0 = np.asarray([(imshape[0]*0.5 - ctr[1]*d2p), (imshape[1]*0.5 + ctr[0]*d2p)])
+        rad = pimms.mag(self.radius, 'deg') * d2p
+        dst = self.n_radii * rad
         rrng0 = (int(np.floor(x0[0] - dst)), int(np.ceil(x0[0] + dst)))
         crng0 = (int(np.floor(x0[1] - dst)), int(np.ceil(x0[1] + dst)))
-        rrng = (max([rrng0[0], 0]), min([rrng0[1], imshape[0].m]))
-        crng = (max([crng0[0], 0]), min([crng0[1], imshape[1].m]))
-        if any(s[1] - s[0] <= 0 for s in [rrng, crng]):
-            print (self.center, self.sigma, self.exponent, self.n_radii)
-            print (imshape, d2p, dst, rrng0, rrng, crng0, crng)
-            raise ValueError('Bad image or std given to PRFSpec._params()')
+        rrng = (max([rrng0[0], 0]), min([rrng0[1], imshape[0]]))
+        crng = (max([crng0[0], 0]), min([crng0[1], imshape[1]]))
+        #if any(s[1] - s[0] < 0 for s in [rrng, crng]):
+            # This just means that the pRF was outside the actual image
+            #return (x0, rad, dst, rrng, crng, rrng0, crng0)
         return (x0, rad, dst, rrng, crng, rrng0, crng0)
     def _weights(self, x0, rad, rrng, crng):
-        rad = rad.m # this should be in pixels when passed in
+        rad = pimms.mag(rad, 'px') # this should be in pixels when passed in
         cnst = -0.5 / (rad*rad)
-        (xmsh,ymsh) = np.meshgrid(np.asarray(range(crng[0], crng[1]), dtype=np.float) - x0[1],
-                                  np.asarray(range(rrng[0], rrng[1]), dtype=np.float) - x0[0])
+        nel = np.clip((rrng[1] - rrng[0]), 0, None) * np.clip((crng[1] - crng[0]), 0, None)
+        if nel < 1:  return np.ones((0,0))
+        if nel == 1: return np.ones((1,1))
+        (xmsh,ymsh) = np.meshgrid(np.arange(crng[0] + 0.5, crng[1] + 0.5) - x0[1],
+                                  np.arange(rrng[0] + 0.5, rrng[1] + 0.5) - x0[0])
         wmtx = np.exp(cnst * (xmsh**2 + ymsh**2))
         # We can trim off the extras now...
         min_w = np.exp(-0.5 * self.n_radii * self.n_radii)
         wmtx[wmtx < min_w] = 0.0
-        wtot = wmtx.sum()
-        if np.isclose(wtot, 0):
-            wmtx *= 0
-        else:
-            wmtx /= wtot
-        return wmtx
+        return wmtx * ny.util.zinv(np.sum(wmtx))
     def matrix(self, imshape, d2p):
         '''
         prf.matrix(im, d2p) or prf.matrix(im.shape, d2p) both yield a sparse matrix containing the
@@ -138,7 +145,8 @@ class PRFSpec(object):
         (x0, rad, dst, rrng, crng, _, _) = self._params(imshape, d2p)
         mini_mtx = self._weights(x0, rad, rrng, crng)
         mtx = sparse.lil_matrix(imshape)
-        mtx[rrng[0]:rrng[1], crng[0]:crng[1]] = mini_mtx
+        if len(mini_mtx) > 0:
+            mtx[rrng[0]:rrng[1], crng[0]:crng[1]] = mini_mtx
         return mtx.asformat('csr')
     def __call__(self, im, d2p, c=None, edge_value=0, weights=True):
         '''
@@ -160,40 +168,46 @@ class PRFSpec(object):
         and (u, None) is returned.
         '''
         # first we just grab out the values and weights; to do this we first grab the parameters:
-        (x0, rad, dst, rrng, crng, rrng0, crng0) = self._params(im.shape, d2p)
-        ## values are tricky because they may extend off the end:
         stackq = True if len(im.shape) == 3 else False
-        u_im = im[:, rrng[0]:rrng[1], crng[0]:crng[1]] if stackq else \
-               im[rrng[0]:rrng[1], crng[0]:crng[1]]
-        if rrng[0] == rrng0[0] and rrng[1] == rrng0[1] and \
-           crng[0] == crng0[0] and crng[1] == crng0[1]:
-            u = u_im
-        else:
-            rows = rrng[1] - rrng[0]
-            cols0 = crng0[1] - crng0[0]
+        (x0, rad, dst, rrng, crng, rrng0, crng0) = self._params(im.shape, d2p)
+        nel = np.clip((rrng[1] - rrng[0]), 0, None) * np.clip((crng[1] - crng[0]), 0, None)
+        if nel < 1:
+            # no overlap with the image
+            if c is not None:
+                return np.zeros(len(im)) if stackq else 0.0
+            elif stackq:
+                return (np.full((len(im), 1), edge_value), np.asarray([1.0]))
+            else:
+                return (np.asarray([edge_value], dtype=np.float), np.asarray([1.0]))
+        ## values are tricky because they may extend off the end:
+        u = im[:, rrng[0]:rrng[1], crng[0]:crng[1]] if stackq else \
+            im[rrng[0]:rrng[1], crng[0]:crng[1]]
+        if rrng[0] != rrng0[0] or rrng[1] != rrng0[1] or \
+           crng[0] != crng0[0] or crng[1] != crng0[1]:
+            (l0, r0) = crng0
+            (l,  r)  = crng
+            (t0, b0) = rrng0
+            (t,  b)  = rrng
+            rows = b - t
+            cols0 = r0 - l0
             ev = edge_value
-            # we may have extra bits on the top...
-            u_r0 = np.full((rrng[0] - rrng0[0], cols0), ev, dtype=np.float) if rrng0[0] < rrng[0] \
-                   else None
-            # or on the bottom
-            u_rr = np.full((rrng0[1] - rrng[1], cols0), ev, dtype=np.float) if rrng0[1] > rrng[1] \
-                   else None
+            # we may have extra bits on the top or the bottom...
+            u_top = np.full((t - t0, cols0), ev, dtype=np.float)
+            u_bot = np.full((b0 - b, cols0), ev, dtype=np.float)
             # we might also have extra bits on the sides
-            u_c0 = np.full((rows, crng[0] - crng0[0]), ev, dtype=np.float) if crng0[0] < crng[0] \
-                   else [[] for r in range(rows)]
-            u_cc = np.full((rows, crng0[1] - crng[1]), ev, dtype=np.float) if crng0[1] > crng[1] \
-                   else [[] for r in range(rows)]
+            u_lft = np.full((rows, l - l0), ev, dtype=np.float)
+            u_rgt = np.full((rows, r0 - r), ev, dtype=np.float)
             # now put them together:
             if stackq:
-                u_mid = np.asarray([np.concatenate((u_c0, uu, u_cc), axis=1) for uu in u_im])
-                u = np.asarray(
-                    [uu if len(row_cat) == 1 else np.concatenate(row_cat, axis=0)
-                     for uu      in u_mid
-                     for row_cat in [tuple([r for r in [u_r0, uu, u_rr] if r is not None])]])
+                u = (u if len(u_lft) == 0 and len(u_rgt) == 0 else
+                     np.asarray([np.concatenate((u_lft, ui, u_rgt), axis=1) for ui in u]))
+                u = (u if len(u_top) == 0 and len(u_bot) == 0 else
+                     np.asarray([np.concatenate((u_top, ui, u_bot), axis=0) for ui in u]))
             else:
-                u_mid = np.concatenate((u_c0, u_im, u_cc), axis=1)
-                row_cat = tuple([r for r in [u_r0, u_mid, u_rr] if r is not None])
-                u = u_mid if len(row_cat) == 1 else np.concatenate(row_cat, axis=0)
+                u = (u if len(u_lft) == 0 and len(u_rgt) == 0 else
+                     np.concatenate((u_lft, ui, u_rgt), axis=1))
+                u = (u if len(u_top) == 0 and len(u_bot) == 0 else
+                     np.concatenate((u_top, ui, u_bot), axis=0))
         # Okay, now u is the correct size and w is the correct size...
         u = np.asarray([uu.flatten() for uu in u]) if stackq else u.flatten()
         if c is None and not weights: return (u, None)
@@ -293,7 +307,7 @@ def calc_pRF_centers(polar_angles, eccentricities):
     return pRF_centers.to('deg')
 
 @pimms.calc('pRFs', 'pRF_radii', memoize=True, cache=True)
-def calc_pRFs(pRF_centers, pRF_sigmas, compressive_constants, pRF_n_radii=3.0):
+def calc_pRFs(pRF_centers, pRF_sigmas, compressive_constants, labels, pRF_n_radii=3.0):
     '''
     calc_pRFs is a calculator that adds to the datapool a set of objects of class PRFSpec;
     these objects represent the pRF and can calculate responses or sparse matrices representing
@@ -313,10 +327,10 @@ def calc_pRFs(pRF_centers, pRF_sigmas, compressive_constants, pRF_n_radii=3.0):
       @ pRF_radii Will be the effective pRF sizes, as determined by: radius = sigma / sqrt(n).
     '''
     prfs = np.asarray(
-        [PRFSpec(x0, sig, n, n_radii=pRF_n_radii)
-         for (x0, sig, n) in zip(pRF_centers, pRF_sigmas, compressive_constants)])
+        [PRFSpec(x0, sig, n, l, n_radii=pRF_n_radii)
+         for (x0, sig, l, n) in zip(pRF_centers, pRF_sigmas, labels, compressive_constants)])
     prfs.setflags(write=False)
-    radii = np.asarray([p.radius.to(units.deg).m for p in prfs]) * units.deg
+    radii = pimms.quant(np.asarray([pimms.mag(p.radius, 'deg') for p in prfs]), 'deg')
     radii.setflags(write=False)
     return (prfs, radii)
 

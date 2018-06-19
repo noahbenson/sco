@@ -139,3 +139,47 @@ def global_lookup(s):
     import importlib
     (mname, fname) = s.rsplit('.', 1)
     return getattr(importlib.import_module(mname), fname)
+
+def gabor_kernel(cpp, theta=0, mean=0, scaling='max_response', **kwargs):
+    '''
+    gabor_kernel(cpp) is similar to identical to skimage.filters.gabor_kernel(cpp) except that the
+      resulting kernel is scaled and standardized according to the optional arguments.
+
+    Options:
+      * theta (default: 0) is the angle of the Gabor to pass to skimage.filters.gabor_kernel.
+      * mean (default: 0) specifies that the Gabor matrix should be made to have the given mean
+        value. If None, then this is left unchanged from skimage.filters.gabor_kernel.
+      * scaling (default: 'max_response') specifies how the Gabor matrix should be scaled. If 
+        None, then the matrix is left unchanged from skimage.filters.gabor_kernel. Other valid
+        values are 'max_response'--scale the Gabor such that it's response to a cosine grating with
+        a frequency of cpp (the first parameter) cycles per pixel is equal to 1; 'volume'--scale the
+        matrix to have unit volume; or 'max'--scale the matrix so that the max of its absolute value
+        is 1.
+      * All other options are passed to skimage.filters.gabor_kernel.
+    '''
+    import numpy as np
+    from skimage.filters import gabor_kernel as gk
+    if _pimms.is_quantity(cpp): cpp = cpp.to(units.cycle / units.px).m
+    if _pimms.is_quantity(theta): theta = theta.to(units.rad).m
+    kern = gk(cpp, theta=theta, **kwargs)
+    # First, fix the mean
+    if mean is not None: kern = kern - np.mean(kern) + mean
+    # Then normalize
+    if scaling is None: return kern
+    scaling = scaling.lower()
+    if scaling == 'max_response':
+        (n,m) = kern.shape
+        (cn,cm) = [0.5*(q - 1) for q in [n,m]]
+        (costh, sinth) = (np.cos(theta), np.sin(theta))
+        mtx = (2*np.pi*cpp) * np.asarray(
+            [[costh*(col - cm) - sinth*((n-row) - cn) for col in range(m)]
+             for row in range(n)])
+        mtx = np.cos(mtx)
+        kern /= np.sum(np.abs(kern * mtx))
+    elif scaling == 'max':
+        kern /= np.max(np.abs(kern))
+    elif scaling == 'volume':
+        kern /= np.sqrt(np.sum(np.abs(kern.flatten())**2))
+    else:
+        raise ValueError('unrecognized scaling parameter: %s' % scaling)
+    return kern

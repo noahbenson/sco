@@ -28,7 +28,6 @@ main_parser = CommandLineParser(
      ('e', 'max-eccentricity',               'max_eccentricity',               Ellipsis),
      ('M', 'measurements-filename',          'measurements_filename',          Ellipsis),
      ('m', 'modality',                       'modality',                       Ellipsis),
-     ('X', 'normalized-pixels-per-degree',   'normalized_pixels_per_degree',   Ellipsis),
      ('o', 'output-directory',               'output_directory',               Ellipsis),
      ('P', 'output-prefix',                  'output_prefix',                  Ellipsis),
      ('S', 'output-suffix',                  'output_suffix',                  Ellipsis),
@@ -126,11 +125,6 @@ The following options may be given.
     May specify the modality as 'surface' or 'volume'. The default is 'surface',
     which calculates predictions for all vertices while 'volume' calculates
     predictions for all ribbon voxels.
-  * -X<x>|--normalized-pixels-per-degree=<x>
-    Specifies the number of pixels per degree after image normalization; this
-    option may be used to down-sample large images prior to processing. By
-    default, this uses the same value as provided in the pixels-per-degree
-    argument.
   * -o<s>|--output-directory=<s>
     Specifies the directory to which to write the output files. By default this
     is the current directory (.).
@@ -262,7 +256,6 @@ option_parsers = {
     'background':                     float,
     'gabor_orientations':             int,
     'max_eccentricity':               float,
-    'normalized_pixels_per_degree':   float,
     'pRF_n_radii':                    float,
     'gamma':                          _parse_gamma_arg,
     'pRF_sigma_offsets_by_label':     _parse_label_arg,

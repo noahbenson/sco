@@ -24,32 +24,36 @@ import sco.contrast
 import sco.analysis
 import sco.util
 
-from sco.impl.benson17 import (divisively_normalize_Heeger1992,
-                               calc_divisive_normalization,
-                               pRF_sigma_slopes_by_label_Kay2013,
+from sco.impl.benson17 import (pRF_sigma_slopes_by_label_Kay2013,
                                contrast_constants_by_label_Kay2013,
                                compressive_constants_by_label_Kay2013,
                                saturation_constants_by_label_Kay2013,
                                divisive_exponents_by_label_Kay2013)
-def cpd_sensitivity(e, s, l):
+
+def spatial_frequency_sensitivity(e, s, l):
     '''
-    sco.impl.kay13.cpd_sensitivity(ecc, prfsz, lbl) always yields the map {3.0: 1.0}.
+    sco.impl.kay13.spatial_frequency_sensitivity(prf, cpds) always yields a narrow band of
+      sensitivity to spatial frequencies near 3 cycles/degree.
     '''
-    return {3.0: 1.0}
+    p0 = 3.0
+    lf0 = _np.log2(1/p0)
+    # weights are log-gaussian distributed around the preferred period
+    cpds = _np.log2(_pimms.mag(cpds, 'cycles/degree'))
+    ws = _np.exp(-0.5 * ((cpds - lf0)/0.25)**2)
+    return ws / _np.sum(ws)
 
 # Default Options ##################################################################################
 # The default options are provided here for the SCO
 @_pimms.calc('kay17_default_options_used')
 def provide_default_options(
-        pRF_sigma_slopes_by_label      = pRF_sigma_slopes_by_label_Kay2013,
-        contrast_constants_by_label    = contrast_constants_by_label_Kay2013,
-        compressive_constants_by_label = compressive_constants_by_label_Kay2013,
-        saturation_constants_by_label  = saturation_constants_by_label_Kay2013,
-        divisive_exponents_by_label    = divisive_exponents_by_label_Kay2013,
-        max_eccentricity               = 7.5,
-        modality                       = 'surface',
-        cpd_sensitivity_function       = cpd_sensitivity,
-        gabor_orientations             = 8):
+        pRF_sigma_slopes_by_label              = pRF_sigma_slopes_by_label_Kay2013,
+        contrast_constants_by_label            = contrast_constants_by_label_Kay2013,
+        compressive_constants_by_label         = compressive_constants_by_label_Kay2013,
+        saturation_constants_by_label          = saturation_constants_by_label_Kay2013,
+        divisive_exponents_by_label            = divisive_exponents_by_label_Kay2013,
+        max_eccentricity                       = 7.5,
+        modality                               = 'surface',
+        spatial_frequency_sensitivity_function = spatial_frequency_sensitivity):
     '''
     provide_default_options is a calculator that optionally accepts values for all parameters for
     which default values are provided in the sco.impl.benson17 package and yields into the calc plan
@@ -77,8 +81,7 @@ sco_plan_data = _pyr.pmap({k:v
                                          sco.anatomy.anatomy_plan_data,
                                          sco.analysis.analysis_plan_data,
                                          sco.util.export_plan_data,
-                                         {'default_options': provide_default_options,
-                                          'divisive_normalization': calc_divisive_normalization}]
+                                         {'default_options': provide_default_options}]
                            for (k,v) in pd.iteritems()})
 
 sco_plan      = _pimms.plan(sco_plan_data)
