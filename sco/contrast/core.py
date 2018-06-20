@@ -76,6 +76,10 @@ def _convolve_from_arg(arg):
     re = np.asarray([ndi.convolve(img, kern.real, mode='constant', cval=bg) for img in imgs])
     im = np.asarray([ndi.convolve(img, kern.imag, mode='constant', cval=bg) for img in imgs])
     return re + 1j*im
+def _spyr_from_arg(arg):
+    'Private function used for multiprocessing the steerable-pyramid filtering of images.'
+    (imgs, th, cpp, nth) = arg
+    return spyr_filter(imgs, th, cpp, 1, nth)
 _default_gabor_orientations        = pimms.quant(np.asarray(range(8), dtype=np.float) * np.pi/8.0,
                                                  'rad')
 
@@ -140,6 +144,7 @@ def calc_oriented_contrast_images(image_array, pixels_per_degree, background,
     if pimms.is_number(gabor_orientations):
         gabor_orientations = np.pi * np.arange(0, gabor_orientations) / gabor_orientations
     gabor_orientations = np.asarray([pimms.mag(th, 'rad') for th in gabor_orientations])
+    nth = len(gabor_orientations)
     if min_pixels_per_degree is None: min_pixels_per_degree = 0
     min_pixels_per_degree = pimms.mag(min_pixels_per_degree, 'pixels / degree')
     if max_pixels_per_filter is None: max_pixels_per_filter = image_array.shape[-1]
@@ -198,29 +203,49 @@ def calc_oriented_contrast_images(image_array, pixels_per_degree, background,
                 d2p = new_d2p
                 cpp = cpd / d2p
         # Okay! We have resized if needed, now we do all the filters for this spatial frequency
-        filters = np.asarray([gabor_kernel(cpp, theta=th) for th in gabor_orientations])
-        if pool is None:
-            freal = np.asarray(
-                [[ndi.convolve(im, k.real, mode='constant', cval=background) for im in imar]
-                 for k in filters])
-            fimag = np.asarray(
-                [[ndi.convolve(im, k.imag, mode='constant', cval=background) for im in imar]
-                 for k in filters])
-            filt_ims = freal + 1j*fimag
+        if use_spatial_gabors:
+            # Using convolution with Gabors
+            filters = np.asarray([gabor_kernel(cpp, theta=th) for th in gabor_orientations])
+            if pool is None:
+                freal = np.asarray(
+                    [[ndi.convolve(im, k.real, mode='constant', cval=background) for im in imar]
+                     for k in filters])
+                fimag = np.asarray(
+                    [[ndi.convolve(im, k.imag, mode='constant', cval=background) for im in imar]
+                     for k in filters])
+                filt_ims = freal + 1j*fimag
+            else:
+                iis = np.asarray(np.round(np.linspace(0, imar.shape[0], len(pool._pool))), dtype=np.int)
+                i0s = iis[:-1]
+                iis = iis[1:]
+                filt_ims = np.asarray(
+                    [np.concatenate(
+                        pool.map(
+                            _convolve_from_arg,
+                            [(imar[i0:ii],k,background) for (i0,ii) in zip(i0s,iis)]),
+                        axis=0)
+                     for k in filters])
         else:
-            iis = np.asarray(np.round(np.linspace(0, imar.shape[0], len(pool._pool))), dtype=np.int)
-            i0s = iis[:-1]
-            iis = iis[1:]
-            filt_ims = np.asarray(
-                [np.concatenate(
-                    pool.map(_convolve_from_arg,
-                             [(imar[i0:ii],k,background) for (i0,ii) in zip(i0s,iis)]),
-                    axis=0)
-                 for k in filters])
+            # Using the steerable pyramid
+            filters = None
+            if pool is None:
+                filt_ims = np.asarray([spyr_filter(imar, th, cpp, 1, len(gabor_orientations))
+                                       for th in nth])
+            else:
+                iis = np.asarray(np.round(np.linspace(0, imar.shape[0], len(pool._pool))), dtype=np.int)
+                i0s = iis[:-1]
+                iis = iis[1:]
+                filt_ims = np.asarray(
+                    [np.concatenate(
+                        pool.map(
+                            _spyr_from_arg,
+                            [(imar[i0:ii],th,cpp,nth) for (i0,ii) in zip(i0s,iis)]),
+                        axis=0)
+                     for th in gabor_orientations])
         # add the results to the lists of results
         filt_ims.setflags(write=False)
         imar.setflags(write=False)
-        filters.setflags(write=False)
+        if filters is not None: filters.setflags(write=False)
         oces[cpd] = filt_ims
         d2ps[cpd] = d2p
         sims[cpd] = imar
@@ -463,7 +488,7 @@ def calc_pRF_contrasts(pRFs, normalized_contrast_images, scaled_pixels_per_degre
             import multiprocessing as mp
             foc = np.zeros((len(pRFs), len(normalized_contrast_images[0])), dtype=np.float)
             soc = np.zeros((len(pRFs), len(normalized_contrast_images[0])), dtype=np.float)
-            pool = mp.Pool()
+            pool = mp.Pool(mp.cpu_count() if multiprocess is True else multiprocess)
             idcs = np.array(np.round(np.linspace(0, len(pRFs), pool._processes + 1)), dtype=np.int)
             idcs = np.asarray([ii for ii in zip(idcs[:-1],idcs[1:])])
             tmp = [(pRFs[i0:ii], normalized_contrast_images, scaled_pixels_per_degree,
