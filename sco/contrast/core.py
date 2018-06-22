@@ -452,9 +452,10 @@ def _pRF_contrasts((pRFs, imss, d2ps, contrast_constants, cpds, sfsf)):
             dat.append((pxs, rfw*sfw))
         # Okay, now we just need to calculate first and second order contrast...
         for (pxs, w) in dat:
-            foc[ii,:] += [np.dot(uu, w) for uu in pxs]
-        for (pxs, w) in dat:
-            soc[ii,:] += [np.dot((uu - c*mu)**2, w) for (uu,mu) in zip(pxs, foc[ii])]
+            tmp = np.sum(pxs * w, axis=1)
+            foc[ii,:] += tmp
+            tmp = np.transpose([tmp])
+            soc[ii,:] += np.sum(w * (pxs - c*tmp)**2, axis=1)
     return (foc, soc)
 
 @pimms.calc('pRF_FOC', 'pRF_SOC', cache=True)
