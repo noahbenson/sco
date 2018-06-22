@@ -433,6 +433,12 @@ def _pRF_contrasts((pRFs, imss, d2ps, contrast_constants, cpds, sfsf)):
     '''
     foc = np.zeros((len(pRFs), len(imss[0])), dtype=np.float)
     soc = np.zeros((len(pRFs), len(imss[0])), dtype=np.float)
+    max_d2p = np.max(d2ps)
+    imss = [(ims if d2p == max_d2p else
+             np.asarray([sktr.pyramid_expand(np.array(im), max_d2p/d2p, cval=0, mode='constant')
+                         for im in ims]))
+        for (ims, d2p) in zip(imss, d2ps)]
+    d2ps = [max_d2p for _ in d2ps]
     for (ii,prf,c) in zip(range(len(pRFs)), pRFs, contrast_constants):
         # For each pRF we first want the spatial frequency weights
         ws = np.asarray(sfsf(prf, cpds))
