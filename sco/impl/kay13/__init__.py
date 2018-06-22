@@ -66,7 +66,7 @@ def provide_default_options(
       * contrast_constant_by_label (sco.impl.benson17.contrast_constant_by_label_Kay2013)
       * modality ('surface')
       * max_eccentricity (12)
-      * cpd_sensitivity_function (sco.impl.benson17.cpd_sensitivity)
+      * spatial_frequency_sensitivity_function (sco.impl.kay13.spatial_frequency_sensitivity)
       * saturation_constant (sco.impl.benson17.saturation_constant_Kay2013)
       * divisive_exponent (sco.impl.benson17.divisive_exponent_Kay2013)
       * gabor_orientations (8)
