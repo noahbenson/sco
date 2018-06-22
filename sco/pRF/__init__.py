@@ -11,13 +11,12 @@ for each pRF involved in the sco calculation and can extract and sum over region
 import pyrsistent as pyr
 import pimms
 from .core  import (calc_compressive_constants, calc_pRF_sigmas, calc_pRF_centers,
-                    calc_pRFs, calc_cpd_sensitivities, PRFSpec)
+                    calc_pRFs, PRFSpec)
 
 pRF_plan_data = pyr.m(compressive_constants = calc_compressive_constants,
                       pRF_sigmas            = calc_pRF_sigmas,
                       pRF_centers           = calc_pRF_centers,
-                      pRFs                  = calc_pRFs,
-                      cpd_sensitivites      = calc_cpd_sensitivities)
+                      pRFs                  = calc_pRFs)
 
 pRF_plan = pimms.plan(pRF_plan_data)
 
