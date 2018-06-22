@@ -70,7 +70,9 @@ def import_stimulus(stim, gcf):
     # We need to make sure this image is between 0 and 1; if not, we assume it's between 0 and 255;
     # for now it seems safe to automatically detect this
     mx = np.max(im)
-    if not np.isclose(mx, 1) and mx > 1: im = im/255.0
+    if   not np.isclose(mx, 65535) and mx > 65535: im /= 4294967295.0
+    elif not np.isclose(mx, 255) and mx > 255:     im /= 65535.0
+    elif not np.isclose(mx, 1) and mx > 1:         im /= 255.0
     # if we were given a color image,
     if gcf is not None: im = gcf(im)
     return im
@@ -157,20 +159,26 @@ def image_apply_aperture(im, radius,
     image_xy = np.transpose(image_xy)
     # pull the interpolated values out of the interp structure:
     z = interp(image_xy[0], image_xy[1], grid=False)
+    # any final (x,y) outside of the image_xy should be background
+    ((xmn,xmx), (ymn,ymx)) = [(np.min(u), np.max(u)) for u in image_xy]
+    ii = (final_xy[0] < xmn) | (final_xy[0] > xmx) | (final_xy[1] < ymn) | (final_xy[1] > ymx)
+    z[ii] = fill_value
     # and put these values into the final image
-    for ((x,y),z) in zip(final_xy.T, z): final_im[x,y] = z
+    final_im[tuple(final_xy)] = z
     # now, take care of the edge
     if edge_width is 0: return final_im
     erad2 = (radius - edge_width)**2
-    for r in range(final_im.shape[0]):
-        for c in range(final_im.shape[1]):
-            r0 = float(r) - final_center[0]
-            c0 = float(c) - final_center[1]
-            d0 = r0*r0 + c0*c0
-            if d0 > erad2 and d0 <= rad2:
-                d0 = np.sqrt(d0) - radius + edge_width
-                w = 0.5*(1.0 + np.cos(d0 * np.pi / edge_width))
-                final_im[r,c] = w*final_im[r,c] + (1.0 - w)*fill_value
+    r0 = np.arange(0, final_im.shape[0], 1)
+    c0 = np.arange(0, final_im.shape[1], 1)
+    (r0,c0) = [u.flatten() for u in np.meshgrid(r0,c0)]
+    r  = np.asarray(r0, dtype=np.float) - final_center[0]
+    c  = np.asarray(c0, dtype=np.float) - final_center[1]
+    d  = r**2 + c**2
+    wh = np.where((d > erad2) & (d < rad2))[0]
+    d = np.sqrt(d[wh])
+    w  = 0.5*(1.0 - np.cos((d - radius)/edge_width * np.pi))
+    wh = (r0[wh], c0[wh])
+    final_im[wh] = w*final_im[wh] + (1.0 - w)*fill_value
     # That's it!
     return final_im
 
@@ -213,7 +221,7 @@ def calc_images(pixels_per_degree, stimulus_map, stimulus_ordering,
     maxdims = [np.max([im.shape[i] for im in imgs.itervalues()]) for i in [0,1]]
     # Then apply the aperture
     if aperture_radius is None:
-        aperture_radius = (0.5 * np.sqrt(np.dot(maxdims, maxdims))) / deg2px
+        aperture_radius = 0.5 * np.max(maxdims) / deg2px
     if aperture_edge_width is None:
         aperture_edge_width = 0
     rad_px = 0
