@@ -215,14 +215,16 @@ def calc_oriented_contrast_images(image_array, pixels_per_degree, background,
                      for k in filters])
                 filt_ims = freal + 1j*fimag
             else:
-                iis = np.asarray(np.round(np.linspace(0, imar.shape[0], len(pool._pool))), dtype=np.int)
+                iis = np.asarray(np.round(np.linspace(0, imar.shape[0], len(pool._pool))),
+                                 dtype=np.int)
                 i0s = iis[:-1]
                 iis = iis[1:]
                 filt_ims = np.asarray(
                     [np.concatenate(
-                        pool.map(
+                        [x for x in pool.map(
                             _convolve_from_arg,
-                            [(imar[i0:ii],k,background) for (i0,ii) in zip(i0s,iis)]),
+                            [(imar[i0:ii],k,background) for (i0,ii) in zip(i0s,iis)])
+                         if len(x) > 0],
                         axis=0)
                      for k in filters])
         else:
@@ -232,14 +234,16 @@ def calc_oriented_contrast_images(image_array, pixels_per_degree, background,
                 filt_ims = np.asarray([spyr_filter(imar, th, cpp, 1, len(gabor_orientations))
                                        for th in nth])
             else:
-                iis = np.asarray(np.round(np.linspace(0, imar.shape[0], len(pool._pool))), dtype=np.int)
+                iis = np.asarray(np.round(np.linspace(0, imar.shape[0], len(pool._pool))),
+                                 dtype=np.int)
                 i0s = iis[:-1]
                 iis = iis[1:]
                 filt_ims = np.asarray(
                     [np.concatenate(
-                        pool.map(
+                        [x for x in pool.map(
                             _spyr_from_arg,
-                            [(imar[i0:ii],th,cpp,nth) for (i0,ii) in zip(i0s,iis)]),
+                            [(imar[i0:ii],th,cpp,nth) for (i0,ii) in zip(i0s,iis)])
+                         if len(x) > 0],
                         axis=0)
                      for th in gabor_orientations])
         # add the results to the lists of results
