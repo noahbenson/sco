@@ -21,6 +21,7 @@ setup(
               'sco.impl',
               'sco.impl.benson17',
               'sco.impl.kay13',
+              'sco.impl.testing',
               'sco.model_comparison'],
     package_data={'': ['LICENSE.txt']},
     install_requires=['numpy        >= 1.2.0',
