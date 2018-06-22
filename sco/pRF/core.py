@@ -334,28 +334,3 @@ def calc_pRFs(pRF_centers, pRF_sigmas, compressive_constants, labels, pRF_n_radi
     radii.setflags(write=False)
     return (prfs, radii)
 
-@pimms.calc('cpd_sensitivities', cache=True)
-def calc_cpd_sensitivities(labels, eccentricities, pRF_radii, cpd_sensitivity_function):
-    '''
-    calc_cpd_sensitivities is a calculator that produces the frequency sensitivity maps for each
-    pRF.
-
-    Required afferent parameters:
-      * labels
-      * eccentricities
-      * pRF_radii
-      * cpd_sensitivity_function
-
-    Output efferent values:
-      @ cpd_sensitivities Will be a persistent numpy array of maps, one per pRF, whose keys are
-        frequencies (in cycles/degree) and whose values are the weights of that frequency for the
-        relevant pRF.
-    '''
-    ss = np.full(len(labels), None, dtype=np.object)
-    if isinstance(cpd_sensitivity_function, basestring):
-        cpd_sensitivity_function = global_lookup(cpd_sensitivity_function)
-    for (i, rad, ecc, lab) in zip(range(len(ss)), pRF_radii, eccentricities, labels):
-        ss[i] = pyr.pmap(cpd_sensitivity_function(ecc, rad, lab))
-    ss.setflags(write=False)
-    return ss
-
