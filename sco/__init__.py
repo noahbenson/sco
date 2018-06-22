@@ -12,9 +12,10 @@ def model_data():
     '''
     if not hasattr(model_data, '_plans') or type(model_data._plans).__name__ != 'PMap':
         # Import relevant functions...
-        import sco.impl.benson17, sco.impl.kay13, pyrsistent as pyr
+        import sco.impl.benson17, sco.impl.kay13, sco.impl.testing, pyrsistent as pyr
         model_data._plans = pyr.m(benson17 = sco.impl.benson17.sco_plan,
-                                  kay13    = sco.impl.kay13.sco_plan)
+                                  kay13    = sco.impl.kay13.sco_plan,
+                                  testing  = sco.impl.testing.sco_plan)
     return model_data._plans
 
 def model_names():
@@ -59,10 +60,11 @@ def build_model(model_name, force_exports=False):
         
 
 # Version information...
-_version_major = 0
-_version_minor = 4
-_version_micro = 0
-__version__ = "%s.%s.%s" % (_version_major, _version_minor, _version_micro)
+version_major = 0
+version_minor = 4
+version_micro = 0
+version_tuple = (version_major, version_minor, version_micro)
+__version__ = "%s.%s.%s" % version_tuple
 
 description = 'Predict the response of the cortex to visual stimuli'
     
@@ -73,7 +75,7 @@ def reload_sco():
     '''
     import sys, sco, \
            sco.util, sco.anatomy, sco.stimulus, sco.contrast, sco.pRF, sco.impl, \
-           sco.impl.benson17, sco.impl.kay13
+           sco.impl.benson17, sco.impl.kay13, sco.impl.testing
     reload(sys.modules['sco.util.plot'])
     reload(sys.modules['sco.util.io'])
     reload(sys.modules['sco.util'])
@@ -89,6 +91,8 @@ def reload_sco():
     reload(sys.modules['sco.analysis'])
     reload(sys.modules['sco.impl.benson17'])
     reload(sys.modules['sco.impl.kay13'])
+    reload(sys.modules['sco.impl.testing.core'])
+    reload(sys.modules['sco.impl.testing'])
     reload(sys.modules['sco.impl'])    
     return reload(sys.modules['sco'])
 
