@@ -9,5 +9,6 @@ testing/debugging version of the SCO model. This testing model is designed to cr
 image (thus require no explicit subject) and to generate specific stimulus files.
 '''
 
-from .core import (sco_plan_data, sco_plan, create_test_stimuli,
+from .core import (sco_plan_data, sco_plan,
+                   noise_pattern_stimulus, luminance_grating, test_grating, test_stimuli,
                    calc_image_retinotopy, calc_stimulus, provide_default_options)

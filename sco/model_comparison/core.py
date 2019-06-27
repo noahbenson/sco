@@ -10,6 +10,8 @@ import os
 import inspect
 import re
 import pickle
+import six
+import pimms
 import numpy as np
 from scipy import io as sio
 
@@ -87,7 +89,7 @@ def _check_default_keys(results, keys=None):
         if k not in keys:
             warnings.warn("Results key %s is not in any of our default key sets!" % k)
     for k in keys:
-        if isinstance(k, basestring):
+        if pimms.is_str(k):
             if k not in results:
                 warnings.warn("Default key %s not in results!" % k)
         # if the key's not a string, we assume it's a dictionary and then we assume its value is a
@@ -255,7 +257,7 @@ def create_model_dataframe(results, image_names, model_df_path="./soc_model_para
     else:
         # else we just use the values as is.
         img_format_string = "%s_image_%s"
-    for k, v in model_df_dict.iteritems():
+    for k, v in six.iteritems(model_df_dict):
         if len(v.shape) == 1 or len(v.shape)==0:
             # This is case 1, and we grab the value as is (or there's only one value, so it's the
             # same for all)
@@ -380,7 +382,7 @@ def _plot_stimuli(condition, stimuli_idx, stimuli, stimuli_descriptions, results
     then show all the subimages for that stimulus. (e.g., condition = [139, 140, 141] and subflag =
     0; then we'll show all the subimages of stimulus 139).
     """
-    if isinstance(condition, basestring):
+    if pimms.is_str(condition):
         condition = [condition == description for description in stimuli_descriptions]
         tmp_idx = stimuli_idx[np.where(condition)]
     else:
@@ -497,7 +499,7 @@ def visualize_model_comparison(conditions, condition_titles, model_df, stimulus_
     filled with "stimuli", showing the corresponding stimuli, and "predictions", showing the
     corresponding predictions).
     """
-    if isinstance(model_df, basestring):
+    if pimms.is_str(model_df):
         # in this case, we also need to grab the results dict
         if draw_pRF_flag:
             results_path = os.path.splitext(model_df)[0] + "_results_dict.pkl"
@@ -508,19 +510,19 @@ def visualize_model_comparison(conditions, condition_titles, model_df, stimulus_
                 results = pickle.load(f)
         model_df = pd.read_csv(model_df)
 
-    if isinstance(stimulus_model_names, basestring):
+    if pimms.is_str(stimulus_model_names):
         stimulus_model_names = _load_pkl_or_mat(stimulus_model_names, 'image_names')
 
     if stimuli_idx is not None:
         stimuli_idx = np.asarray(stimuli_idx)
 
-    if isinstance(stimuli_descriptions, basestring):
+    if pimms.is_str(stimuli_descriptions):
         stimuli_descriptions = _load_pkl_or_mat(stimuli_descriptions, 'stimuliNames')
         if stimuli_idx is not None:
             stimuli_descriptions = stimuli_descriptions[0, stimuli_idx]
             stimuli_descriptions = np.asarray([i[0] for i in stimuli_descriptions])
 
-    if isinstance(stimuli, basestring):
+    if pimms.is_str(stimuli):
         stimuli = _load_pkl_or_mat(stimuli, 'images')
         stimuli = stimuli[0, :]
 
@@ -532,7 +534,7 @@ def visualize_model_comparison(conditions, condition_titles, model_df, stimulus_
     for cond, title, kw in zip(conditions, condition_titles, plot_kwargs):
         plot_df = _create_plot_df(model_df, stimuli_idx, stimuli_descriptions)
         
-        if isinstance(cond, basestring):
+        if pimms.is_str(cond):
             plot_df = plot_df[plot_df.image_name==cond]
             order = None
         else:

@@ -15,6 +15,7 @@ package.
 import pyrsistent              as _pyr
 import pimms                   as _pimms
 import numpy                   as _np
+import six
 from   sco.util   import units as _units
 
 import sco.anatomy
@@ -28,7 +29,8 @@ from sco.impl.benson17 import (pRF_sigma_slopes_by_label_Kay2013,
                                contrast_constants_by_label_Kay2013,
                                compressive_constants_by_label_Kay2013,
                                saturation_constants_by_label_Kay2013,
-                               divisive_exponents_by_label_Kay2013)
+                               divisive_exponents_by_label_Kay2013,
+                               gains_by_label_Kay2013)
 
 def spatial_frequency_sensitivity(prf, cpds):
     '''
@@ -51,6 +53,7 @@ def provide_default_options(
         compressive_constants_by_label         = compressive_constants_by_label_Kay2013,
         saturation_constants_by_label          = saturation_constants_by_label_Kay2013,
         divisive_exponents_by_label            = divisive_exponents_by_label_Kay2013,
+        gains_by_label                         = gains_by_label_Kay2013,
         max_eccentricity                       = 7.5,
         modality                               = 'surface',
         gabor_spatial_frequencies              = (_pimms.quant(3.0, 'cycles/deg'),),
@@ -84,6 +87,6 @@ sco_plan_data = _pyr.pmap(
                    sco.analysis.analysis_plan_data,
                    sco.util.export_plan_data,
                    {'default_options': provide_default_options}]
-     for (k,v) in pd.iteritems()})
+     for (k,v) in six.iteritems(pd)})
 
 sco_plan      = _pimms.plan(sco_plan_data)

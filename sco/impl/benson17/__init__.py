@@ -13,6 +13,7 @@ available to the downstream calculations if not provided by the user or other ca
 import pyrsistent                                    as _pyr
 import pimms                                         as _pimms
 import numpy                                         as _np
+import six
 from   sco.util                     import units     as _units
 from   neuropythy.vision.retinotopy import pRF_data  as _neuropythy_pRF_data
 
@@ -26,7 +27,7 @@ import sco.util
 
 # Parameters Defined by Labels #####################################################################
 visual_area_names_by_label = _pyr.pmap({1:'V1', 2:'V2', 3:'V3', 4:'hV4'})
-visual_area_labels_by_name = _pyr.pmap({v:k for (k,v) in visual_area_names_by_label.iteritems()})
+visual_area_labels_by_name = _pyr.pmap({v:k for (k,v) in six.iteritems(visual_area_names_by_label)})
 pRF_sigma_slopes_by_label_Kay2013      = _pyr.pmap(
     {1:_neuropythy_pRF_data['kay2013']['v1' ]['m'],
      2:_neuropythy_pRF_data['kay2013']['v2' ]['m'],
@@ -51,7 +52,8 @@ contrast_constants_by_label_Kay2013    = _pyr.pmap({1:0.93, 2:0.99, 3:0.99, 4:0.
 compressive_constants_by_label_Kay2013 = _pyr.pmap({1:0.18, 2:0.13, 3:0.12, 4:0.115})
 saturation_constants_by_label_Kay2013  = _pyr.pmap({1:0.50, 2:0.50, 3:0.50, 4:0.50})
 divisive_exponents_by_label_Kay2013    = _pyr.pmap({1:1.00, 2:1.00, 3:1.00, 4:1.00})
-gains_by_label_Benson2017              = _pyr.pmap({1:1.00, 2:1.00, 3:1.00, 4:1.00})
+gains_by_label_Kay2013                 = _pyr.pmap({1:1.00, 2:0.79, 3:0.71, 4:1.23})
+#gains_by_label_Kay2013                 = _pyr.pmap({1:1.64, 2:0.66, 3:0.65, 4:1.72})
 # Some experimental parameters by labels
 ones_by_label  = _pyr.pmap({1:1.0, 2:1.0, 3:1.0, 4:1.0})
 zeros_by_label = _pyr.pmap({1:0.0, 2:0.0, 3:0.0, 4:1.0})
@@ -72,7 +74,7 @@ def spatial_frequency_sensitivity(prf, cpds):
         preferences in the human visual cortex. Vision Sciences Society annual meeting, 2018,
         poster presentation.
     '''
-    r  = _np.sqrt(prf.center[0]**2 + prf.center[1]**2)
+    r  = _pimms.mag(_np.sqrt(prf.center[0]**2 + prf.center[1]**2), 'degree')
     p0 = 0.13594144711190237 * r + 0.33057571189207119
     lf0 = _np.log2(1/p0)
     # weights are log-gaussian distributed around the preferred period
@@ -89,7 +91,7 @@ def provide_default_options(
         contrast_constants_by_label    = 'sco.impl.benson17.contrast_constants_by_label_Kay2013',
         compressive_constants_by_label = 'sco.impl.benson17.compressive_constants_by_label_Kay2013',
         saturation_constants_by_label  = 'sco.impl.benson17.saturation_constants_by_label_Kay2013',
-        gains_by_label                 = 'sco.impl.benson17.gains_by_label_Benson2017',
+        gains_by_label                 = 'sco.impl.benson17.gains_by_label_Kay2013',
         max_eccentricity               = 12,
         modality                       = 'surface',
         spatial_frequency_sensitivity_function = 'sco.impl.benson17.spatial_frequency_sensitivity'):
@@ -107,7 +109,7 @@ def provide_default_options(
       * max_eccentricity (12)
       * spatial_frequency_sensitivity_function (sco.impl.benson17.spatial_frequency_sensitivity)
       * saturation_constant_by_label (sco.impl.benson17.saturation_constants_by_label_Kay2013)
-      * gains_by_label (sco.impl.benson17.divisive_exponent_Kay2013)
+      * gains_by_label (sco.impl.benson17.gains_by_label_Kay2013)
       * spatial_frequency_sensitivity_function (sco.impl.benson17.spatial_frequency_sensitivity)
       * gabor_orientations (8)
     '''
@@ -123,6 +125,6 @@ sco_plan_data = _pyr.pmap({k:v
                                          sco.analysis.analysis_plan_data,
                                          sco.util.export_plan_data,
                                          {'default_options': provide_default_options}]
-                           for (k,v) in pd.iteritems()})
+                           for (k,v) in six.iteritems(pd)})
 
 sco_plan      = _pimms.plan(sco_plan_data)

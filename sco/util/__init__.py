@@ -6,7 +6,8 @@
 import pyrsistent as _pyr
 import pimms      as _pimms
 
-from .plot import (cortical_image, corrcoef_image, report_image)
+from .plot import (vfield_plot, cortex_plot, responses_plot, draw_gabor_schema,
+                   contrast_energies_plot, cortical_image, corrcoef_image, report_image)
 from .io   import (export_predictions, export_analysis, export_report_images, calc_exported_files,
                    export_vega, require_exports)
 # The unit registry that we use
@@ -29,7 +30,7 @@ def lookup_labels(labels, data_by_labels, **kwargs):
     res = None
     null = None
     raise_q = True
-    if isinstance(data_by_labels, basestring): data_by_labels = global_lookup(data_by_labels)
+    if _pimms.is_str(data_by_labels): data_by_labels = global_lookup(data_by_labels)
     if 'null' in kwargs:
         null = kwargs['null']
         raise_q = False
@@ -75,7 +76,7 @@ def import_mri(filename, feature='data'):
     '''
     import nibabel as nib, nibabel.freesurfer.mghformat as mgh
     if feature is None: feature = 'object'
-    if not isinstance(feature, basestring): raise ValueError('feature must be a string or None')
+    if not _pimms.is_str(feature): raise ValueError('feature must be a string or None')
     if feature == 'all': feature = 'object'
     # go ahead and get the file
     try:    obj = nib.load(filename)

@@ -19,7 +19,7 @@ def increment_values(values):
     all the values by one, and overwrite. Either way, values (either the new vector or the path to
     the file) is returned
     """
-    if isinstance(values, basestring):
+    if pimms.is_str(values):
         with open(values, 'r') as f:
             values_tmp = f.read()
         values_tmp = np.asarray([int(i) for i in values_tmp.strip().split(' ')])+1
@@ -36,7 +36,7 @@ def decrement_values(values):
     all the values by one, and overwrite. Either way, values (either the new vector or the path to
     the file) is returned
     """
-    if isinstance(values, basestring):
+    if pimms.is_str(values):
         with open(values, 'r') as f:
             values_tmp = f.read()
         values_tmp = np.asarray([int(i) for i in values_tmp.strip().split(' ')])-1

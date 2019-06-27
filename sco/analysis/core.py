@@ -7,7 +7,7 @@ import numpy as np
 import scipy as sp, scipy.spatial as sps
 import pyrsistent as pyr
 import nibabel, nibabel.freesurfer.mghformat as fsmgh
-import os, sys, pimms
+import os, sys, pimms, six
 from sco.util import units, import_mri, nearest_indices, apply_affine
 
 @pimms.calc('measurements', 'measurement_indices',
@@ -142,7 +142,7 @@ def calc_correspondence_maps(coordinates, cortex_indices, hemispheres, modality,
     # measured voxel matches a predicted voxel but that predicted voxel is closer to another
     # measured voxel, we don't use it. This will result in a single minimal mapping, which we store
     # in a 2 x n array of [prediction_indices, measurement_indices]
-    cind = np.asarray([(i,j) for (i,j) in mpp.iteritems() if j in ppm and ppm[j] == i],
+    cind = np.asarray([(i,j) for (i,j) in six.iteritems(mpp) if j in ppm and ppm[j] == i],
                       dtype=np.int).T
     return (mpp, ppm, cind)
 
@@ -187,8 +187,8 @@ def calc_prediction_analysis(prediction, measurements, labels, hemispheres, pRFs
 
     Provided efferent values:
       * prediction_analysis: a mapping of analysis results, broken down by label and hemisphere
-        as well as eccentricity and polar angle. These analyses are in many cases itables that can be
-        easily exported as CSV files.
+        as well as eccentricity and polar angle. These analyses are in many cases itables that can 
+        be easily exported as CSV files.
     '''
     if measurements is None: return (None, None)
     (pidcs,midcs) = corresponding_indices
@@ -204,7 +204,8 @@ def calc_prediction_analysis(prediction, measurements, labels, hemispheres, pRFs
     rok = np.where(np.isfinite(r))[0]
     # Okay, lets get some indexes ready; we're going to continue to build these up then at the end
     # we'll calculate correlations over all of them
-    lbls = {pyr.m(label=lbl):np.intersect1d(rok, np.where(labels == lbl)[0]) for lbl in np.unique(labels)}
+    lbls = {pyr.m(label=lbl):np.intersect1d(rok, np.where(labels == lbl)[0])
+            for lbl in np.unique(labels)}
     unq_ls = lbls.keys()
     lbls[pyr.m(hemi='lh')] = np.intersect1d(rok, np.where(hemispheres == 1)[0])
     lbls[pyr.m(hemi='rh')] = np.intersect1d(rok, np.where(hemispheres == -1)[0])
@@ -244,14 +245,18 @@ def calc_prediction_analysis(prediction, measurements, labels, hemispheres, pRFs
         lbls[pyr.m(polar_angle=mu)] = np.intersect1d(lbls[l0], ii)
     # Okay, now we have the labels divide up; let's look at correlations of vertices across images;
     res = {}
-    for (lbl, idcs) in lbls.iteritems():
+    for (lbl, idcs) in six.iteritems(lbls):
         if len(idcs) == 0: continue
         # first, calculate mean responses across the area
         mu_pred = np.mean(prediction[idcs, :],   axis=0)
         mu_trth = np.mean(measurements[idcs, :], axis=0)
         # store the correlation of these arrays
-        try:    res[lbl] = np.corrcoef(mu_pred, mu_trth)[0,1]
-        except: res[lbl] = np.nan
+        if np.isclose(np.std(mu_pred), 0) or np.isclose(np.std(mu_trth), 0):
+            res[lbl] = 0
+            print(lbl)
+        else:
+            try:    res[lbl] = np.corrcoef(mu_pred, mu_trth)[0,1]
+            except: res[lbl] = np.nan
     # That's it!
-    return (pyr.pmap(res), pyr.pmap({k:pyr.pvector(v) for (k,v) in lbls.iteritems()}))
+    return (pyr.pmap(res), pyr.pmap({k:pyr.pvector(v) for (k,v) in six.iteritems(lbls)}))
     

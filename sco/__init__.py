@@ -36,7 +36,7 @@ def build_model(model_name, force_exports=False):
         all standard exports will complete before the model is returned.
     '''
     import sco.util, pimms
-    if isinstance(model_name, basestring):
+    if pimms.is_str(model_name):
         model_name = model_name.lower()
         _plans = model_data()
         if model_name not in _plans: raise ValueError('Unknown mode: %s' % model_name)
@@ -73,9 +73,10 @@ def reload_sco():
     '''
     reload_sco() reloads the sco and all of its submodules; it returns the new sco module.
     '''
+    from importlib import reload
     import sys, sco, \
-           sco.util, sco.anatomy, sco.stimulus, sco.contrast, sco.pRF, sco.impl, \
-           sco.impl.benson17, sco.impl.kay13, sco.impl.testing
+           sco.util, sco.anatomy, sco.stimulus, sco.contrast, sco.pRF, \
+           sco.impl.benson17, sco.impl.kay13, sco.impl.testing, sco.impl
     reload(sys.modules['sco.util.plot'])
     reload(sys.modules['sco.util.io'])
     reload(sys.modules['sco.util'])

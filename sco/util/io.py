@@ -6,7 +6,7 @@
 import numpy as np
 import pyrsistent as pyr
 import json
-import os, pimms, sys
+import os, pimms, sys, six
 import nibabel, nibabel.freesurfer.mghformat as fsmgh
 
 from .plot import (cortical_image, corrcoef_image, report_image)
@@ -179,7 +179,8 @@ def export_analysis(prediction_analysis, prediction_analysis_labels, output_dire
                                                        output_prefix, output_suffix)
     # Write out the label-group correlation data
     filename = os.path.join(output_directory, output_prefix + 'analysis' + output_suffix + '.csv')
-    headers = sorted(list(set([k for m in prediction_analysis.iterkeys() for k in m.iterkeys()])))
+    headers = [k for m in six.iterkeys(prediction_analysis) for k in six.iterkeys(m)]
+    headers = sorted(list(set(headers)))
     header = ''
     fmt = ''
     for h in headers:
@@ -189,7 +190,7 @@ def export_analysis(prediction_analysis, prediction_analysis_labels, output_dire
     fmt = fmt[1:] + ',%s,%s\n'
     with open(filename, 'w') as f:
         f.write(header)
-        for (lbl, rval) in prediction_analysis.iteritems():
+        for (lbl, rval) in six.iteritems(prediction_analysis):
             n = len(prediction_analysis_labels[lbl])
             tup = tuple([lbl[k] if k in lbl else 'all' for k in headers])
             tup = tup + (n, rval)

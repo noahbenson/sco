@@ -6,7 +6,7 @@
 import numpy                 as     np
 import pyrsistent            as     pyr
 
-import pimms, os, sys, warnings
+import pimms, os, sys, warnings, six
 
 from   ..util                import (lookup_labels, units)
 
@@ -58,7 +58,7 @@ def import_stimulus(stim, gcf):
     may be either a filename or an image array; the argument gcf must be the gamma correction
     function.
     '''
-    if isinstance(stim, basestring):
+    if pimms.is_str(stim):
         im = np.asarray(data.load(stim), dtype=np.float)
     else:
         im = np.asarray(stim, dtype=np.float)
@@ -100,7 +100,7 @@ def import_stimuli(stimulus, gamma_correction_function):
     # Make this into a map so that we have ids and images/filenames
     if not pimms.is_map(stimulus):
         # first task: turn this into a map
-        if isinstance(stimulus, basestring):
+        if pimms.is_str(stimulus):
             stimulus = {stimulus: stimulus}
             order = [stimulus]
         elif hasattr(stimulus, '__iter__'):
@@ -112,8 +112,9 @@ def import_stimuli(stimulus, gamma_correction_function):
     else:
         order = stimulus.keys()
     # we can use the stimulus_importer function no matter what the stimulus arguments are
-    stim_map = {k:import_stimulus(v, gamma_correction_function) for (k,v) in stimulus.iteritems()}
-    for u in stim_map.itervalues():
+    stim_map = {k: import_stimulus(v, gamma_correction_function)
+                for (k,v) in six.iteritems(stimulus)}
+    for u in six.itervalues(stim_map):
         u.setflags(write=False)
     return {'stimulus_map': pyr.pmap(stim_map), 'stimulus_ordering': pyr.pvector(order)}
 
@@ -184,6 +185,7 @@ def image_apply_aperture(im, radius,
 
 @pimms.calc('image_array', 'image_names', 'pixel_centers', cache=True)
 def calc_images(pixels_per_degree, stimulus_map, stimulus_ordering,
+                max_image_size=250,
                 background=0.5,
                 aperture_radius=None,
                 aperture_edge_width=None):
@@ -218,7 +220,7 @@ def calc_images(pixels_per_degree, stimulus_map, stimulus_ordering,
     # first, let's interpret our arguments
     deg2px = float(pimms.mag(pixels_per_degree, 'px/deg'))
     imgs = stimulus_map
-    maxdims = [np.max([im.shape[i] for im in imgs.itervalues()]) for i in [0,1]]
+    maxdims = [np.max([im.shape[i] for im in six.itervalues(imgs)]) for i in [0,1]]
     # Then apply the aperture
     if aperture_radius is None:
         aperture_radius = 0.5 * np.max(maxdims) / deg2px
@@ -236,7 +238,7 @@ def calc_images(pixels_per_degree, stimulus_map, stimulus_ordering,
         except: raise ValuerError('aperture_edge_width given in unrecognized units')
     bg = background
     imgs = {k:image_apply_aperture(im, rad_px, fill_value=bg, edge_width=aew_px)
-            for (k,im) in imgs.iteritems()}
+            for (k,im) in six.iteritems(imgs)}
     # Separate out the images and names and
     imar = np.asarray([imgs[k] for k in stimulus_ordering], dtype=np.float)
     imar.setflags(write=False)

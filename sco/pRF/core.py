@@ -90,7 +90,7 @@ class PRFSpec(object):
            (q: sensitivity, x: distance from pRF center, s: sigma, n: exponent, r: radius)
            q = exp(-(x/r)^2 / 2)^n
              = exp(-n (x/r)^2 / 2)
-             = exp(-(sqrt(n) x/r)^2 / s)
+             = exp(-(sqrt(n) x/r)^2 / 2)
              = exp(-(x / (r/sqrt(n)))^2 / 2)
              = exp(-(x / s)^2 / 2)
            this tells us s == r / sqrt(n) so r = s * sqrt(n)

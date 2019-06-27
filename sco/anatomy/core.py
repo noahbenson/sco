@@ -4,14 +4,15 @@
 # By Noah C. Benson
 
 import numpy                 as     np
-import neuropythy            as     neuro
-import neuropythy.commands   as     neurocmd
+import neuropythy            as     ny
+import neuropythy.commands   as     nycmd
 import nibabel               as     nib
 import nibabel.freesurfer    as     fs
 import pyrsistent            as     pyr
 
-import pimms, os, sys, warnings
+import pimms, os, sys, warnings, six
 
+from   neuropythy.util       import is_tuple
 from   ..util                import (lookup_labels, units, import_mri, apply_affine)
 
 @pimms.calc('freesurfer_subject', memoize=True)
@@ -26,9 +27,9 @@ def import_freesurfer_subject(subject=None):
     '''
     if subject is None:
         return None
-    if isinstance(subject, basestring):
-        subject = neuro.freesurfer_subject(subject)
-    if not isinstance(subject, neuro.Subject):
+    if pimms.is_str(subject):
+        subject = ny.freesurfer_subject(subject)
+    if not ny.is_subject(subject):
         raise ValueError('Value given for subject is neither a string nor a neuropythy subject')
     return subject
 
@@ -52,23 +53,14 @@ def import_freesurfer_affine(freesurfer_subject, modality='surface'):
         the voxel index space). Note that this is merged into cortex_affine during a later
         calculation that determines the source of the retinotopic data.
     '''
-    if freesurfer_subject is None:
-        return None
-    raff = None
-    try:
-        raff = freesurfer_subject.mgh_images['lh.ribbon'].affine
-    except:
-        raff = freesurfer_subject.mgh_images['rh.ribbon'].affine
-    if modality.lower() == 'volume':
+    if freesurfer_subject is None: return None
+    else: img = freesurfer_subject.images['brain']
+    raff = img.affine
+    if   modality.lower() == 'volume':
         return raff
     elif modality.lower() == 'surface':
-        try:
-            tkr = freesurfer_subject.mgh_images['lh.ribbon'].header.get_vox2ras_tkr()
-        except:
-            tkr = freesurfer_subject.mgh_images['rh.ribbon'].header.get_vox2ras_tkr()
-        return np.dot(raff, np.linalg.inv(tkr))
-    else:
-        raise ValueError('Unknown modality: %s' % modality)
+        return np.dot(raff, np.linalg.inv(img.header.get_vox2ras_tkr()))
+    else: raise ValueError('Unknown modality: %s' % modality)
 
 @pimms.calc('measured_polar_angles',  'measured_eccentricities', 'measured_labels',
             'measured_hemispheres',   'measured_cortex_indices', 'measured_cortex_coordinates',
@@ -149,7 +141,7 @@ def import_measured_retinotopy(max_eccentricity, polar_angle_filename=None,
                 'measured_labels':         None,  'measured_hemispheres':        None,
                 'measured_cortex_indices': None,  'measured_cortex_coordinates': None,
                 'measured_cortex_affine':  None}
-    elif all(isinstance(f, tuple) for f in flnms):
+    elif all(is_tuple(f) for f in flnms):
         if hemisphere_filename is not None:
             warnings.warn('ignoring hemisphere_filename input because (lh, rh) filenames given')
         if modality != 'surface':
@@ -165,11 +157,11 @@ def import_measured_retinotopy(max_eccentricity, polar_angle_filename=None,
         aids = np.concatenate((np.transpose(lids), np.transpose(rids)))
         crds = None
         tx = None
-    elif any(isinstance(f, tuple) for f in flnms):
+    elif any(is_tuple(f) for f in flnms):
         raise ValueError('Either all or no filenames must be given as (lh_filename, rh_filename)')
+    elif modality != 'volume':
+        raise ValueError('Given modality is not volume, but single retinotopy filenames given')
     else:
-        if modality != 'volume':
-            raise ValueError('Given modality is not volume, but single retinotopy filenames given')
         (angs, eccs, lbls) = [import_mri(f) for f in flnms]
         vshape = angs.shape
         # get the anatomical id's:
@@ -248,7 +240,7 @@ def import_benson14_retinotopy(freesurfer_subject, max_eccentricity, measured_la
         lab = os.path.join(subject.path, 'mri', 'benson14_varea.mgz')
         if not os.path.exists(ang) or not os.path.exists(ecc) or not os.path.exists(lab):
             # Apply the template first...
-            neurocmd.benson14_retinotopy.main(subject.path)
+            nycmd.benson14_retinotopy.main(subject.path)
         if not os.path.exists(ang) or not os.path.exists(ecc) or not os.path.exists(lab):        
             raise ValueError('No areas template found/created for subject: ' + lab)
         angle_mgz = fs.mghformat.load(ang)
@@ -294,12 +286,12 @@ def import_benson14_retinotopy(freesurfer_subject, max_eccentricity, measured_la
            not os.path.exists(lecc) or not os.path.exists(recc) or \
            not os.path.exists(llab) or not os.path.exists(rlab):
             # Apply the template first...
-            neurocmd.benson14_retinotopy.main(subject.path)
+            nycmd.benson14_retinotopy.main(subject.path)
         if not os.path.exists(lang) or not os.path.exists(rang) or \
            not os.path.exists(lecc) or not os.path.exists(recc) or \
            not os.path.exists(llab) or not os.path.exists(rlab):
             raise ValueError('No anatomical template found/created for subject')
-        (lang,lecc,llab,rang,recc,rlab) = [neuro.load(fl) for fl in (lang,lecc,llab,rang,recc,rlab)]
+        (lang,lecc,llab,rang,recc,rlab) = [ny.load(fl) for fl in (lang,lecc,llab,rang,recc,rlab)]
         llab = np.round(np.abs(llab))
         rlab = np.round(np.abs(rlab))
         (angs0, eccs, labs) = [np.concatenate([ldat, rdat], axis=0)
@@ -327,7 +319,7 @@ def import_benson14_retinotopy(freesurfer_subject, max_eccentricity, measured_la
            'benson14_cortex_coordinates': coords,
            'benson14_hemispheres':        hemis}
     # make sure they're all write-only
-    for v in res.itervalues():
+    for v in six.itervalues(res):
         v.setflags(write=False)
     return res
 
@@ -410,7 +402,7 @@ def calc_prediction_coordinates(cortex_coordinates, cortex_affine):
     return res
 
 @pimms.calc('predicted_responses_exported_q')
-def export_predicted_responses(predicted_responses,
+def export_predicted_responses(prediction,
                                predicted_responses_filename, image_ordering_filename,
                                freesurfer_subject, cortex_indices, hemispheres, modality,
                                overwrite_files_on_export=True, export_fill_value=0):
@@ -419,7 +411,7 @@ def export_predicted_responses(predicted_responses,
     to disk.
 
     Required afferent parameters:
-      @ predicted_responses Must be a dict of keys (image names) to values (predictions); each value
+      @ prediction Must be a dict of keys (image names) to values (predictions); each value
         must be a vector the same size as cortex_indices.
       @ freesurfer_subject Must be the neuropythy.freesurfer.Subject object.
       @ cortex_indices Must be the indices into the anatomical data; this is generated by the calc
@@ -463,13 +455,13 @@ def export_predicted_responses(predicted_responses,
             return False
     # Okay, now we can start actually doing work:
     fill = float(export_fill_value)
-    imorder = predicted_responses.keys()
+    imorder = prediction.keys()
     if modality.lower() == 'volume':
         vol0 = freesurfer_subject.mgh_images['lh.ribbon']
         vol0dims = vol0.get_data().shape
-        preds = np.full(vol0dims + (len(predicted_responses),), fill, dtype=np.float32)
+        preds = np.full(vol0dims + (len(prediction),), fill, dtype=np.float32)
         for (n,imk) in enumerate(imorder):
-            for ((i,j,k),val) in zip(cortex_indices, predicted_responses[imk]):
+            for ((i,j,k),val) in zip(cortex_indices, prediction[imk]):
                 preds[i,j,k,n] = val
         hdr = vol0.header.copy()
         hdr.set_data_dtype(np.float32)
@@ -483,7 +475,7 @@ def export_predicted_responses(predicted_responses,
             preds = np.full((1, 1, hemi.vertex_count, len(idcs)), fill, dtype=np.float32)
             pidcs = np.asarray(cortex_indices)[idcs]
             for (i,imk) in enumerate(imorder):
-                preds[0,0,pidcs,i] = predicted_responses[imk][idcs]
+                preds[0,0,pidcs,i] = prediction[imk][idcs]
             mgh = fs.mghformat.MGHImage(preds, np.eye(4))
             mgh_flnm = hemi.name.lower() + '.' + prfnm
             mgh.to_filename(mgh_flnm)

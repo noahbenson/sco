@@ -10,7 +10,6 @@ import neuropythy            as     ny
 import skimage.transform     as     sktr
 from   scipy                 import ndimage as ndi
 from   scipy.misc            import imresize
-from   types                 import (IntType, LongType)
 from   ..util                import (lookup_labels, units, global_lookup, gabor_kernel)
 from   .spyr                 import spyr_filter
 
@@ -85,10 +84,11 @@ _default_gabor_orientations        = pimms.quant(np.asarray(range(8), dtype=np.f
 
 @pimms.calc('oriented_contrast_images', 'scaled_pixels_per_degree', 'scaled_image_arrays',
             'gabor_filters',
-            memoize=True)
+            cache=True)
 def calc_oriented_contrast_images(image_array, pixels_per_degree, background,
                                   gabor_spatial_frequencies,
                                   gabor_orientations=_default_gabor_orientations,
+                                  max_image_size=250,
                                   min_pixels_per_degree=0.5, max_pixels_per_filter=27,
                                   ideal_filter_size=17,
                                   use_spatial_gabors=True,
@@ -126,6 +126,8 @@ def calc_oriented_contrast_images(image_array, pixels_per_degree, background,
         image is to be resized.
       @ ideal_filter_size May specify the ideal size of a filter when rescaling. By default this is
         17.
+      @ max_image_size Specifies that if the image array has a dimension with more pixels thatn the
+        given value, the images should be down-sampled.
 
     Efferent output values:
       @ oriented_contrast_images Will be a tuple of n image arrays, each of which is of size
@@ -158,14 +160,19 @@ def calc_oriented_contrast_images(image_array, pixels_per_degree, background,
         try:
             import multiprocessing as mp
             pool = mp.Pool(mp.cpu_count() if multiprocess is True else multiprocess)
-        except:
-            pool = None
+        except: pool = None
     # These will be updated as we go through the spatial frequencies:
     d2p0 = pimms.mag(pixels_per_degree, 'pixels/degree')
     imar = image_array
     d2p  = d2p0
     # how wide are the images in degrees
     imsz_deg = float(image_array.shape[-1]) / d2p0
+    # If we're over the max image size, we need to downsample now
+    if image_array.shape[1] > max_image_size:
+        ideal_zoom = image_array.shape[-1] / max_image_size
+        imar = sktr.pyramid_reduce(imar.T, ideal_zoom,
+                                   mode='constant', cval=background, multichannel=True).T
+        d2p = float(imar.shape[1]) / imsz_deg
     # We build up these  solution
     oces = {} # oriented contrast energy images
     d2ps = {} # scaled pixels per degree
@@ -183,12 +190,14 @@ def calc_oriented_contrast_images(image_array, pixels_per_degree, background,
             # higher resolution than min pixels per degree
             ideal_zoom = float(filt.shape[0]) / float(ideal_filter_size)
             # resize an image and check it out...
-            im = sktr.pyramid_reduce(imar[0], ideal_zoom, mode='constant', cval=background)
+            im = sktr.pyramid_reduce(imar[0], ideal_zoom, mode='constant', cval=background,
+                                     multichannel=False)
             new_d2p = float(im.shape[0]) / imsz_deg
             if new_d2p < min_pixels_per_degree:
                 # this zoom is too much; we will try to zoom to the min d2p instead
                 ideal_zoom = d2p / min_pixels_per_degree
-                im = sktr.pyramid_reduce(imar[0], ideal_zoom, mode='constant', cval=background)
+                im = sktr.pyramid_reduce(imar[0], ideal_zoom, mode='constant', cval=background,
+                                         multichannel=False)
                 new_d2p = float(im.shape[0]) / imsz_deg
                 # if this still didn't work, we aren't resizing, just using what we have
                 if new_d2p < min_pixels_per_degree:
@@ -197,9 +206,8 @@ def calc_oriented_contrast_images(image_array, pixels_per_degree, background,
             # okay, at this point, we've only failed to find a d2p if ideal_zoom is 1
             if ideal_zoom != 1 and new_d2p != d2p:
                 # resize and update values
-                imar = np.asarray(
-                    [sktr.pyramid_reduce(ii, ideal_zoom, mode='constant', cval=background)
-                     for ii in imar])
+                imar = sktr.pyramid_reduce(imar.T, ideal_zoom,
+                                           mode='constant', cval=background, multichannel=True).T
                 d2p = new_d2p
                 cpp = cpd / d2p
         # Okay! We have resized if needed, now we do all the filters for this spatial frequency
@@ -232,7 +240,7 @@ def calc_oriented_contrast_images(image_array, pixels_per_degree, background,
             filters = None
             if pool is None:
                 filt_ims = np.asarray([spyr_filter(imar, th, cpp, 1, len(gabor_orientations))
-                                       for th in nth])
+                                       for th in gabor_orientations])
             else:
                 iis = np.asarray(np.round(np.linspace(0, imar.shape[0], len(pool._pool))),
                                  dtype=np.int)
@@ -254,6 +262,7 @@ def calc_oriented_contrast_images(image_array, pixels_per_degree, background,
         d2ps[cpd] = d2p
         sims[cpd] = imar
         flts[cpd] = filters
+    if pool is not None: pool.close()
     # okay, we've finished; just mark things as read-only and make lists into tuples...
     cpds = [pimms.mag(cpd, 'cycles/degree') for cpd in gabor_spatial_frequencies]
     (oces, d2ps, sims, flts) = [tuple([m[cpd] for cpd in cpds])
@@ -288,7 +297,9 @@ def divisively_normalize_Heeger1992_square(data, cpds,
     Same as "divisively_normalize_Heeger1992", but squares data before divisive normalization and
     sums across orientations for the surround term.
     '''
-    return divisively_normalize_Heeger1992_square(data**2, cpds,
+    if pimms.is_ndarray(data): data = data**2
+    else: data = tuple([d**2 for d in data])
+    return divisively_normalize_Heeger1992_square(data, cpds,
                                                   divisive_exponent=divisive_exponent,
                                                   saturation_constant=saturation_constant)
 
@@ -329,7 +340,7 @@ def divisively_normalize_spatialfreq(data, cpds,
                 ni = np.array(ni)
                 zoom = float(n0.shape[0]) / float(ni.shape[0])
                 f = sktr.pyramid_expand if zoom > 1 else sktr.pyramid_reduce
-                n0 += f(ni, zoom, mode='constant', cval=background)
+                n0 += f(ni, zoom, mode='constant', cval=background, multichannel=False)
         n0 /= len(neis) # use the mean
         normalized.append(np.mean(data[level]**r, axis=0) / (s**r + n0**r))
     for nrm in normalized: nrm.setflags(write=False)
@@ -374,7 +385,7 @@ def calc_compressive_constants(labels, compressive_constants_by_label):
     r.setflags(write=False)
     return r
 
-@pimms.calc('normalized_contrast_images', memoize=True)
+@pimms.calc('normalized_contrast_images', cache=True)
 def calc_divisive_normalization(oriented_contrast_images, scaled_pixels_per_degree,
                                 gabor_spatial_frequencies,
                                 divisive_exponent=0.5, saturation_constant=1.0,
@@ -422,7 +433,7 @@ def calc_divisive_normalization(oriented_contrast_images, scaled_pixels_per_degr
     return {'normalized_contrast_images': r}
 
 # For use with multiprocessing
-def _pRF_contrasts((pRFs, imss, d2ps, contrast_constants, cpds, sfsf)):
+def _pRF_contrasts(arg):
     '''
     _pRF_contrasts actually calculates the first- and second-order contrast for a group of PRFSpec
       objects, a set of images, and the related parameters. This function requires a single tuple
@@ -431,12 +442,12 @@ def _pRF_contrasts((pRFs, imss, d2ps, contrast_constants, cpds, sfsf)):
        gabor_spatial_frequencies, spatial_frequency_sensitivity_function). The function returns a
       tuple of (first-order-contrast, second-order-contrast) matrices.
     '''
+    (pRFs, imss, d2ps, contrast_constants, cpds, sfsf) = arg
     foc = np.zeros((len(pRFs), len(imss[0])), dtype=np.float)
     soc = np.zeros((len(pRFs), len(imss[0])), dtype=np.float)
     max_d2p = np.max(d2ps)
     imss = [(ims if d2p == max_d2p else
-             np.asarray([sktr.pyramid_expand(np.array(im), max_d2p/d2p, cval=0, mode='constant')
-                         for im in ims]))
+             sktr.pyramid_expand(ims.T, max_d2p/d2p, cval=0, mode='constant', multichannel=True).T)
         for (ims, d2p) in zip(imss, d2ps)]
     d2ps = [max_d2p for _ in d2ps]
     for (ii,prf,c) in zip(range(len(pRFs)), pRFs, contrast_constants):
@@ -495,6 +506,7 @@ def calc_pRF_contrasts(pRFs, normalized_contrast_images, scaled_pixels_per_degre
     # Okay, we're going to walk through the pRFs
     ok = False
     if multiprocess:
+        pool = None
         try:
             import multiprocessing as mp
             foc = np.zeros((len(pRFs), len(normalized_contrast_images[0])), dtype=np.float)
@@ -511,6 +523,8 @@ def calc_pRF_contrasts(pRFs, normalized_contrast_images, scaled_pixels_per_degre
                 soc[i0:ii] = s
             ok = True
         except: pass
+        finally:
+            if pool is not None: pool.close()
     if not ok:
         (foc, soc) = _pRF_contrasts((pRFs, normalized_contrast_images, scaled_pixels_per_degree,
                                      contrast_constants, gabor_spatial_frequencies, sfsf))
@@ -519,8 +533,27 @@ def calc_pRF_contrasts(pRFs, normalized_contrast_images, scaled_pixels_per_degre
     soc.setflags(write=False)
     return (foc, soc)
 
+@pimms.calc('gains', cache=True)
+def calc_gains(labels, gains_by_label):
+    '''
+    calc_gains is a calculator that translates gains_by_label into a numpy array of contrast
+    constants using the labels parameter.
+
+    Required afferent parameters:
+      * labels
+      @ gains_by_label Must be a map whose keys are label values and whose values are
+        the variance-like contrast constant for that particular area; all values appearing in the
+        pRF labels must be found in this map.
+
+    Provided efferent parameters:
+      @ gains Will be an array of values, one per pRF, of the gains.
+    '''
+    r = np.array(lookup_labels(labels, gains_by_label), dtype='float')
+    r.setflags(write=False)
+    return r
+
 @pimms.calc('prediction', cache=True)
-def calc_compressive_nonlinearity(pRF_SOC, compressive_constants):
+def calc_compressive_nonlinearity(pRF_SOC, compressive_constants, gains):
     '''
     calc_compressive_nonlinearity is a calculator that applies a compressive nonlinearity to the
     predicted second-order-contrast responses of the pRFs. If the compressive constant is n is and
@@ -529,13 +562,15 @@ def calc_compressive_nonlinearity(pRF_SOC, compressive_constants):
     Required afferent parameters:
       * pRF_SOC
       * compressive_constants
+      * gains
 
     Provided efferent values:
       @ prediction Will be the final predictions of %BOLD-change for each pRF examined, up to gain.
         The data will be stored in an (n x m) matrix where n is the number of pRFs (see labels,
         hemispheres, cortex_indices) and m is the number of images.
     '''
-    out = np.asarray([s**n for (s, n) in zip(pRF_SOC, compressive_constants)])
+    gains = np.reshape(gains, (-1,1))
+    out = gains * np.asarray([s**n for (s, n) in zip(pRF_SOC, compressive_constants)])
     out.setflags(write=False)
     return out
     
