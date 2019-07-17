@@ -5,7 +5,7 @@
 
 import os, sys, six, tempfile, tarfile
 
-from neuropythy.util import CommandLineParser
+from pimms import CommandLineParser
 from sco import (build_model)
 
 main_parser = CommandLineParser(
@@ -270,8 +270,8 @@ option_parsers = {
 def main(argv):
     (args, opts) = main_parser(argv)
     if opts['help']:
-        print sco_help
-        return 1
+        print(sco_help)
+        return 0
     if len(args) < 3: raise ValueError('Syntax: sco <subject> <pixels-per-degree> <images...>')
     # Arg 0 is a subject; arg 1 is a pixels-per-degree value, rest are images
     sub = _check_extract(args[0], True)
