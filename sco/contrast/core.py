@@ -9,7 +9,6 @@ import pyrsistent            as     pyr
 import neuropythy            as     ny
 import skimage.transform     as     sktr
 from   scipy                 import ndimage as ndi
-from   scipy.misc            import imresize
 from   ..util                import (lookup_labels, units, global_lookup, gabor_kernel)
 from   .spyr                 import spyr_filter
 
